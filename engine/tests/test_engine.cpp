@@ -16,6 +16,7 @@
 #include <mutex>
 
 #include "corridor/alerts.hpp"
+#include "corridor/trust.hpp"
 #include "corridor/api.hpp"
 #include "corridor/briefing.hpp"
 #include "corridor/websocket.hpp"
@@ -139,6 +140,15 @@ static void test_geo() {
     CHECK_NEAR(distance_to_segment_nm({0.0, -1.0}, a, b), 60.04, 0.1);  // behind the start
     CHECK_NEAR(distance_to_segment_nm({0.0, 11.0}, a, b), 60.04, 0.1);  // past the end
     CHECK_NEAR(distance_to_segment_nm({0.0, 5.0}, a, b), 0.0, 1e-6);    // on the leg
+    const RouteProjection on_leg = project_onto_route({0.0, 5.0}, {a, b});
+    CHECK_NEAR(on_leg.cross_nm, 0.0, 1e-3);
+    CHECK_NEAR(on_leg.along_nm, distance_nm(a, {0.0, 5.0}), 0.05);
+    const RouteProjection beside = project_onto_route({1.0, 5.0}, {a, b});
+    CHECK_NEAR(beside.cross_nm, 60.04, 0.1);
+    CHECK_NEAR(beside.along_nm, on_leg.along_nm, 0.2);
+    const RouteProjection past = project_onto_route({0.0, 11.0}, {a, b});
+    CHECK_NEAR(past.along_nm, distance_nm(a, b), 0.05);
+    CHECK_NEAR(past.cross_nm, 60.04, 0.1);
 
     const std::vector<LatLon> route{{0.0, 0.0}, {0.0, 1.0}, {1.0, 1.0}};
     CHECK_NEAR(route_length_nm(route), 120.08, 0.1);
@@ -875,8 +885,10 @@ static void test_saved_routes() {
     before.destination_category = "VFR";
     before.crew_oxygen_required = true;
     before.hazard_feed = "ok";
+    before.traffic_feed = "ok";
     before.min_spo2 = 0.82;
     before.hazards.push_back({"H1", "G-AIRMET ICE", 0.0, 20000.0, 150.0, 295.0, true});
+    before.traffic.push_back({"a1b2c3", "DAL477", 14000.0, 450.0, true});
 
     const auto path = std::filesystem::temp_directory_path() / "corridor-saved-routes-test.tsv";
     std::filesystem::remove(path);
@@ -893,6 +905,10 @@ static void test_saved_routes() {
         CHECK(stored->crew_oxygen_required);
         CHECK(stored->hazards.size() == 1 && stored->hazards[0].id == "H1");
         CHECK(stored->hazards[0].at_altitude && *stored->hazards[0].at_altitude);
+        CHECK(stored->traffic_feed == "ok");
+        CHECK(stored->traffic.size() == 1 && stored->traffic[0].icao == "a1b2c3");
+        CHECK(stored->traffic[0].callsign == "DAL477");
+        CHECK(stored->traffic[0].near_planned_altitude);
         CHECK_NEAR(stored->min_spo2, 0.82, 1e-6);
     }
     std::filesystem::remove(path);
@@ -1097,6 +1113,205 @@ static void test_wind() {
     CHECK(!parse_wind_snapshot(bad, rejected, error) && !error.empty());
 }
 
+static void test_trust() {
+    const TrustReport plain = trust_report(nullptr, 1700000000, false, false, false, false, false);
+    CHECK(plain.feeds == "none");
+    CHECK(plain.model_gap_pts > 0.0);
+    CHECK(plain.model_gap_pts < 8.0);
+    CHECK(!plain.wind_shift_min);
+    CHECK(plain.why.find("Muhm 2007") != std::string::npos);
+    CHECK(plain.why.find("Cottrell 1995") != std::string::npos);
+    const double ground = estimated_spo2(0.0) * 100.0;
+    CHECK(std::fabs(ground - 97.0) < 3.0);
+    const double drop =
+        estimated_spo2(650.0) * 100.0 - estimated_spo2(8000.0) * 100.0;
+    CHECK(std::fabs(drop - 4.4) < 4.0);
+
+    const std::int64_t now = 1700000000;
+    const double course = initial_bearing_deg(kPhx.pos, kIxd.pos);
+    const double from = std::fmod(course + 180.0, 360.0);
+    std::ostringstream snap;
+    snap << std::fixed << "#corridor-wind v1 generated=" << now << "\n";
+    for (int hour = 0; hour <= 8; ++hour) {
+        const std::int64_t epoch = now + static_cast<std::int64_t>(hour) * 3600;
+        for (const LatLon& pos : {kPhx.pos, kIxd.pos}) {
+            snap << pos.lat_deg << "\t" << pos.lon_deg << "\t" << epoch << "\t9880\t" << from
+                 << "\t40\n";
+            snap << pos.lat_deg << "\t" << pos.lon_deg << "\t" << epoch << "\t18280\t" << from
+                 << "\t40\n";
+        }
+    }
+    WindSnapshot winds;
+    std::string error;
+    {
+        std::istringstream in(snap.str());
+        CHECK(parse_wind_snapshot(in, winds, error));
+    }
+    const TrustReport fresh = trust_report(&winds, now, false, false, false, false, false);
+    CHECK(fresh.feeds == "fresh");
+    CHECK(fresh.routes >= 1);
+    CHECK(fresh.wind_shift_min && *fresh.wind_shift_min > 10.0);
+    CHECK(fresh.score < plain.score || fresh.wind_shift_min);
+    const TrustReport again = trust_report(&winds, now, false, false, false, false, false);
+    CHECK(again.score == fresh.score);
+    CHECK(again.wind_shift_min && fresh.wind_shift_min &&
+          std::fabs(*again.wind_shift_min - *fresh.wind_shift_min) < 1e-9);
+
+    const TrustReport stale = trust_report(&winds, now, true, true, false, false, true);
+    CHECK(stale.feeds == "stale");
+    CHECK(stale.score <= fresh.score - 30);
+
+    const Response body =
+        briefing_endpoint(get_request("/briefing?from=KPHX&to=KIXD&alt=13500&gs=140"),
+                          demo_airports(), nullptr, now, nullptr, nullptr, &winds);
+    CHECK(body.body.find("\"trust\"") != std::string::npos);
+    CHECK(body.body.find("\"model_gap_pts\"") != std::string::npos);
+}
+
+static void test_traffic() {
+    const LatLon mid = intermediate_point(kPhx.pos, kIxd.pos, 0.5);
+    const LatLon close{mid.lat_deg + 10.0 / 60.0, mid.lon_deg};
+    const LatLon wide{mid.lat_deg + 40.0 / 60.0, mid.lon_deg};
+    char row_mid[160], row_high[160], row_close[160], row_wide[160], row_old[160];
+    std::snprintf(row_mid, sizeof(row_mid),
+                  "a1b2c3\tDAL477\t%.4f\t%.4f\t14000\t420\t40\t1699999980\n", mid.lat_deg,
+                  mid.lon_deg);
+    std::snprintf(row_high, sizeof(row_high),
+                  "b2c3d4\tUAL1\t%.4f\t%.4f\t35000\t480\t40\t1699999980\n", mid.lat_deg,
+                  mid.lon_deg);
+    std::snprintf(row_close, sizeof(row_close),
+                  "c3d4e5\t\t%.4f\t%.4f\t13500\t180\t\t1699999980\n", close.lat_deg, close.lon_deg);
+    std::snprintf(row_wide, sizeof(row_wide),
+                  "d4e5f6\tN1\t%.4f\t%.4f\t13500\t100\t90\t1699999980\n", wide.lat_deg,
+                  wide.lon_deg);
+    std::snprintf(row_old, sizeof(row_old),
+                  "eeeeee\tOLD1\t%.4f\t%.4f\t13500\t100\t90\t1699999700\n", mid.lat_deg,
+                  mid.lon_deg);
+    const std::string header =
+        "#corridor-traffic v1 generated=1700000000 coverage=32,-125,49,-83\n";
+    const std::string body = header + std::string("abcdef\t\t47.4500\t-122.3000\t10000\t200\t180\t1699999980\n") +
+                             row_mid + row_high + row_close + row_wide + row_old;
+
+    TrafficSnapshot snapshot;
+    std::string error;
+    {
+        std::istringstream in(body);
+        CHECK(parse_traffic_snapshot(in, snapshot, error));
+    }
+    CHECK(snapshot.generated_epoch == 1700000000);
+    CHECK(snapshot.has_coverage);
+    CHECK(snapshot.aircraft.size() == 6);
+    CHECK(route_inside_coverage(snapshot, {kPhx.pos, kIxd.pos}));
+
+    const std::string target = "/briefing?from=KPHX&to=KIXD&alt=13500&gs=140";
+    const Response fresh =
+        briefing_endpoint(get_request(target), demo_airports(), nullptr, 1700000030, nullptr,
+                          nullptr, nullptr, &snapshot);
+    CHECK(fresh.status == 200);
+    CHECK(fresh.body.find("\"traffic_feed\": {\"status\": \"ok\"") != std::string::npos);
+    CHECK(fresh.body.find("\"on_route\": 3") != std::string::npos);
+    CHECK(fresh.body.find("\"near_planned_altitude\": 2") != std::string::npos);
+    CHECK(fresh.body.find("\"icao\": \"a1b2c3\"") != std::string::npos);
+    CHECK(fresh.body.find("\"icao\": \"c3d4e5\"") != std::string::npos);
+    CHECK(fresh.body.find("\"icao\": \"b2c3d4\"") != std::string::npos);
+    CHECK(fresh.body.find("d4e5f6") == std::string::npos);  // 40 nm off the route
+    CHECK(fresh.body.find("abcdef") == std::string::npos);  // Seattle, not this corridor
+    CHECK(fresh.body.find("eeeeee") == std::string::npos);  // position already stale at publish
+    CHECK(fresh.body.find("\"callsign\": \"DAL477\"") != std::string::npos);
+    CHECK(fresh.body.find("\"callsign\": null") != std::string::npos);
+    CHECK(fresh.body.find("adsb_equipped") != std::string::npos);
+
+    const auto status = route_status(get_request(target), demo_airports(), nullptr, 1700000030,
+                                     nullptr, nullptr, nullptr, nullptr, &snapshot);
+    CHECK(status && status->traffic_feed == "ok");
+    CHECK(status && status->traffic.size() == 3);
+
+    RouteStatus empty;
+    empty.traffic_feed = "ok";
+    const auto arrived = diff_route_status(empty, *status);
+    bool announced = false;
+    for (const std::string& line : arrived) {
+        if (line.find("inside the corridor now") == std::string::npos) continue;
+        announced = true;
+        CHECK(line.find("meet") == std::string::npos);
+    }
+    CHECK(announced);
+    const auto left = diff_route_status(*status, empty);
+    bool departed = false;
+    for (const std::string& line : left) {
+        if (line.find("no longer inside the corridor") != std::string::npos) departed = true;
+    }
+    CHECK(departed);
+
+    RouteStatus stale_status = *status;
+    stale_status.traffic_feed = "stale";
+    stale_status.traffic.clear();
+    const auto went_stale = diff_route_status(*status, stale_status);
+    CHECK(went_stale.size() == 1);
+    CHECK(went_stale[0] == "Traffic picture is now stale");
+
+    const Response old = briefing_endpoint(get_request(target), demo_airports(), nullptr,
+                                           1700000000 + 8 * 60 + 5, nullptr, nullptr, nullptr,
+                                           &snapshot);
+    CHECK(old.body.find("\"traffic_feed\": {\"status\": \"stale\"") != std::string::npos);
+    CHECK(old.body.find("\"icao\": \"a1b2c3\"") != std::string::npos);
+    const auto stale_route =
+        route_status(get_request(target), demo_airports(), nullptr, 1700000000 + 8 * 60 + 5,
+                     nullptr, nullptr, nullptr, nullptr, &snapshot);
+    CHECK(stale_route && stale_route->traffic_feed == "stale" && stale_route->traffic.empty());
+
+    const std::string partial_header =
+        "#corridor-traffic v1 generated=1700000000 coverage=46,-123,48,-121\n";
+    TrafficSnapshot partial;
+    {
+        std::istringstream in(partial_header + row_mid);
+        CHECK(parse_traffic_snapshot(in, partial, error));
+    }
+    CHECK(!route_inside_coverage(partial, {kPhx.pos, kIxd.pos}));
+    const Response gap =
+        briefing_endpoint(get_request(target), demo_airports(), nullptr, 1700000030, nullptr,
+                          nullptr, nullptr, &partial);
+    CHECK(gap.body.find("\"status\": \"partial\"") != std::string::npos);
+    CHECK(gap.body.find("\"route_covered\": false") != std::string::npos);
+    CHECK(gap.body.find("a1b2c3") != std::string::npos);
+    const auto gap_status = route_status(get_request(target), demo_airports(), nullptr, 1700000030,
+                                         nullptr, nullptr, nullptr, nullptr, &partial);
+    CHECK(gap_status && gap_status->traffic_feed == "partial" && gap_status->traffic.empty());
+
+    const Response none = briefing_endpoint(get_request(target), demo_airports());
+    CHECK(none.body.find("traffic_feed") == std::string::npos);
+    CHECK(none.body.find("\"traffic\": null") != std::string::npos);
+
+    auto rejects = [](const std::string& text) {
+        std::istringstream in(text);
+        TrafficSnapshot out;
+        std::string why;
+        return !parse_traffic_snapshot(in, out, why) && !why.empty() && out.aircraft.empty();
+    };
+    CHECK(rejects("a1b2c3\tDAL477\t0\t0\t1\t1\t1\t1\n"));
+    CHECK(rejects(header + "A1B2C3\tDAL477\t33\t-112\t10000\t200\t1\t1699999980\n"));
+    CHECK(rejects(header + "a1b2c3\tDAL477\t33\t-112\t10000\t200\t1\n"));
+    CHECK(rejects(header + row_mid + row_mid));
+    CHECK(rejects("#corridor-traffic v1 generated=1700000000 coverage=49,-125,32,-83\n"));
+
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("corridor_tr_" + std::to_string(::getpid()) + ".tsv");
+    { std::ofstream(path) << body; }
+    TrafficStore store(path.string());
+    CHECK(store.reload());
+    CHECK(store.current()->aircraft.size() == 6);
+    CHECK(health_endpoint(nullptr, 1700000030, nullptr, nullptr, nullptr, &store)
+              .body.find("\"status\": \"ok\"") != std::string::npos);
+    CHECK(health_endpoint(nullptr, 1700000000 + 8 * 60 + 5, nullptr, nullptr, nullptr, &store)
+              .body.find("degraded") != std::string::npos);
+    CHECK(traffic_metrics_text(store, 1700000030).find("corridor_traffic_aircraft 6") !=
+          std::string::npos);
+    { std::ofstream(path) << "junk\n"; }
+    CHECK(!store.reload());
+    CHECK(store.current()->aircraft.size() == 6);
+    std::filesystem::remove(path);
+}
+
 static void test_replay() {
     namespace fs = std::filesystem;
     const fs::path dir = fs::temp_directory_path() / "corridor-replay-test";
@@ -1160,6 +1375,7 @@ static void test_replay() {
     CHECK(first->body.find("\"hazards\": null") != std::string::npos);
     CHECK(first->body.find("\"taf\": null") != std::string::npos);
     CHECK(first->body.find("\"wind\": null") != std::string::npos);
+    CHECK(first->body.find("\"traffic\": null") != std::string::npos);
     CHECK(first->body.find("29.42") != std::string::npos);
 
     const std::string q2 = "/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=" +
@@ -1218,6 +1434,8 @@ int main() {
     test_saved_routes();
     test_taf();
     test_wind();
+    test_trust();
+    test_traffic();
     test_replay();
     test_atmosphere();
     test_oxygen();

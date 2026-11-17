@@ -8,6 +8,7 @@
 //   CORRIDOR_HAZARD_SNAPSHOT    snapshot file written by ingest/hazard_worker.py
 //   CORRIDOR_TAF_SNAPSHOT       snapshot file written by ingest/taf_worker.py
 //   CORRIDOR_WIND_SNAPSHOT      snapshot file written by ingest/wind_worker.py
+//   CORRIDOR_TRAFFIC_SNAPSHOT   snapshot file written by ingest/traffic_worker.py
 //   CORRIDOR_HISTORY            archived generations, default <snapshot dir>/history
 //   CORRIDOR_WEB_ROOT           folder holding the demo page, default "web"
 //
@@ -29,6 +30,7 @@
 #include "corridor/http.hpp"
 #include "corridor/saved_routes.hpp"
 #include "corridor/taf.hpp"
+#include "corridor/traffic.hpp"
 #include "corridor/weather.hpp"
 #include "corridor/websocket.hpp"
 #include "corridor/wind.hpp"
@@ -55,11 +57,12 @@ std::string setting(int argc, char** argv, int index, const char* env_name,
 // Generations live beside the snapshots the workers already publish. A missing
 // directory only means replay has nothing to open; live briefings do not read it.
 std::string history_root_of(const std::string& weather, const std::string& hazards,
-                            const std::string& taf, const std::string& wind) {
+                            const std::string& taf, const std::string& wind,
+                            const std::string& traffic) {
     if (const char* env = std::getenv("CORRIDOR_HISTORY")) {
         if (*env) return env;
     }
-    for (const std::string& path : {weather, hazards, taf, wind}) {
+    for (const std::string& path : {weather, hazards, taf, wind, traffic}) {
         if (path.empty()) continue;
         const auto parent = std::filesystem::path(path).parent_path();
         return (parent.empty() ? std::filesystem::path("history") : parent / "history").string();
@@ -77,8 +80,10 @@ int main(int argc, char** argv) {
     const std::string web_root = setting(0, nullptr, 1, "CORRIDOR_WEB_ROOT", "web");
     const std::string taf_path = setting(0, nullptr, 1, "CORRIDOR_TAF_SNAPSHOT", "");
     const std::string wind_path = setting(0, nullptr, 1, "CORRIDOR_WIND_SNAPSHOT", "");
+    const std::string traffic_path = setting(0, nullptr, 1, "CORRIDOR_TRAFFIC_SNAPSHOT", "");
     const std::string saved_path = setting(0, nullptr, 1, "CORRIDOR_SAVED_ROUTES", "run/saved_routes.tsv");
-    const std::string history_root = history_root_of(weather_path, hazard_path, taf_path, wind_path);
+    const std::string history_root =
+        history_root_of(weather_path, hazard_path, taf_path, wind_path, traffic_path);
     if (port <= 0 || port > 65535) {
         std::fprintf(stderr, "invalid port\n");
         return 2;
@@ -89,14 +94,17 @@ int main(int argc, char** argv) {
     std::unique_ptr<HazardStore> hazard_owner;
     std::unique_ptr<TafStore> taf_owner;
     std::unique_ptr<WindStore> wind_owner;
+    std::unique_ptr<TrafficStore> traffic_owner;
     if (!weather_path.empty()) weather_owner = std::make_unique<WeatherStore>(weather_path);
     if (!hazard_path.empty()) hazard_owner = std::make_unique<HazardStore>(hazard_path);
     if (!taf_path.empty()) taf_owner = std::make_unique<TafStore>(taf_path);
     if (!wind_path.empty()) wind_owner = std::make_unique<WindStore>(wind_path);
+    if (!traffic_path.empty()) traffic_owner = std::make_unique<TrafficStore>(traffic_path);
     WeatherStore* weather = weather_owner.get();
     HazardStore* hazards = hazard_owner.get();
     TafStore* tafs = taf_owner.get();
     WindStore* winds = wind_owner.get();
+    TrafficStore* traffic = traffic_owner.get();
 
     // Holding the shared_ptrs keeps one consistent snapshot alive for a whole
     // evaluation even if a reload swaps in a newer one meanwhile.
@@ -105,8 +113,9 @@ int main(int argc, char** argv) {
         const auto hz = hazards ? hazards->current() : nullptr;
         const auto tf = tafs ? tafs->current() : nullptr;
         const auto wd = winds ? winds->current() : nullptr;
+        const auto tr = traffic ? traffic->current() : nullptr;
         return route_status(request, airports, wx.get(), now_epoch(), hz.get(), error, tf.get(),
-                            wd.get());
+                            wd.get(), tr.get());
     };
 
     SavedRoutes saved_routes(saved_path);
@@ -119,14 +128,16 @@ int main(int argc, char** argv) {
             if (hazards) hazards->current();
             if (tafs) tafs->current();
             if (winds) winds->current();
+            if (traffic) traffic->current();
             return (weather ? weather->reloads() : 0) + (hazards ? hazards->reloads() : 0) +
-                   (tafs ? tafs->reloads() : 0) + (winds ? winds->reloads() : 0);
+                   (tafs ? tafs->reloads() : 0) + (winds ? winds->reloads() : 0) +
+                   (traffic ? traffic->reloads() : 0);
         },
         256, &saved_routes);
 
     HttpServer server;
     server.get("/health", [&](const Request&) {
-        return health_endpoint(weather, now_epoch(), hazards, tafs, winds);
+        return health_endpoint(weather, now_epoch(), hazards, tafs, winds, traffic);
     });
     server.get("/airports", [&](const Request&) {
         const auto wx = weather ? weather->current() : nullptr;
@@ -138,8 +149,9 @@ int main(int argc, char** argv) {
         const auto hz = hazards ? hazards->current() : nullptr;
         const auto tf = tafs ? tafs->current() : nullptr;
         const auto wd = winds ? winds->current() : nullptr;
+        const auto tr = traffic ? traffic->current() : nullptr;
         return briefing_endpoint(request, airports, wx.get(), now_epoch(), hz.get(), tf.get(),
-                                 wd.get());
+                                 wd.get(), tr.get());
     });
     server.get("/hazards", [&](const Request&) {
         const auto hz = hazards ? hazards->current() : nullptr;
@@ -165,6 +177,7 @@ int main(int argc, char** argv) {
         if (hazards) response.body += hazard_metrics_text(*hazards, now_epoch());
         if (tafs) response.body += taf_metrics_text(*tafs, now_epoch());
         if (winds) response.body += wind_metrics_text(*winds, now_epoch());
+        if (traffic) response.body += traffic_metrics_text(*traffic, now_epoch());
         return response;
     });
     server.upgrade("/alerts", [&](const Request& request, int fd) -> std::optional<Response> {
@@ -189,11 +202,12 @@ int main(int argc, char** argv) {
 
     hub.start();
     std::fprintf(stderr,
-                 "corridor_server listening on %s:%d, weather: %s, hazards: %s, taf: %s, wind: %s, saved routes: %s, history: %s\n",
+                 "corridor_server listening on %s:%d, weather: %s, hazards: %s, taf: %s, wind: %s, traffic: %s, saved routes: %s, history: %s\n",
                  host.c_str(), port, weather ? weather_path.c_str() : "not configured",
                  hazards ? hazard_path.c_str() : "not configured",
                  tafs ? taf_path.c_str() : "not configured",
-                 winds ? wind_path.c_str() : "not configured", saved_path.c_str(),
+                 winds ? wind_path.c_str() : "not configured",
+                 traffic ? traffic_path.c_str() : "not configured", saved_path.c_str(),
                  history_root.c_str());
     // Browsers open spare connections and hold them idle, so leave headroom.
     const bool started = server.listen(host, static_cast<std::uint16_t>(port), 8);

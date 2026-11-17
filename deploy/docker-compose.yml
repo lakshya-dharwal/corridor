@@ -14,6 +14,7 @@ services:
       CORRIDOR_HAZARD_SNAPSHOT: /snapshots/hazards.tsv
       CORRIDOR_TAF_SNAPSHOT: /snapshots/taf.tsv
       CORRIDOR_WIND_SNAPSHOT: /snapshots/wind.tsv
+      CORRIDOR_TRAFFIC_SNAPSHOT: /snapshots/traffic.tsv
       CORRIDOR_HISTORY: /snapshots/history
       CORRIDOR_SAVED_ROUTES: /var/lib/corridor/saved_routes.tsv
     volumes:

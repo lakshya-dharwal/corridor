@@ -50,6 +50,19 @@ CREATE TABLE IF NOT EXISTS saved_routes (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ADS-B positions. The engine reads the snapshot file, not this table.
+CREATE TABLE IF NOT EXISTS traffic (
+    icao            TEXT NOT NULL,
+    seen_at         TIMESTAMPTZ NOT NULL,
+    callsign        TEXT,
+    alt_ft          REAL,
+    groundspeed_kt  REAL,
+    track_deg       REAL,
+    geom            GEOGRAPHY(POINT, 4326) NOT NULL,
+    PRIMARY KEY (icao, seen_at)
+);
+CREATE INDEX IF NOT EXISTS traffic_seen_idx ON traffic (seen_at DESC);
+
 -- One row per feed, so a stale-feed alert is a single query.
 CREATE TABLE IF NOT EXISTS feed_status (
     feed             TEXT PRIMARY KEY,

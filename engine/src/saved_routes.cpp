@@ -78,6 +78,35 @@ std::string encode_hazards(const std::vector<RouteHazard>& hazards) {
     return out.str();
 }
 
+std::string encode_traffic(const std::vector<RouteTraffic>& aircraft) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < aircraft.size(); ++i) {
+        const RouteTraffic& one = aircraft[i];
+        if (i) out << kRecord;
+        out << scrub(one.icao) << kField << scrub(one.callsign) << kField
+            << optional_field(one.alt_ft) << kField << optional_field(one.along_nm) << kField
+            << (one.near_planned_altitude ? "1" : "0");
+    }
+    return out.str();
+}
+
+std::vector<RouteTraffic> decode_traffic(const std::string& text) {
+    std::vector<RouteTraffic> aircraft;
+    if (text.empty()) return aircraft;
+    for (const std::string& record : split(text, kRecord)) {
+        const std::vector<std::string> fields = split(record, kField);
+        if (fields.size() != 5 || fields[0].empty()) continue;
+        RouteTraffic one;
+        one.icao = fields[0];
+        one.callsign = fields[1];
+        one.alt_ft = optional_number(fields[2]);
+        one.along_nm = optional_number(fields[3]).value_or(0.0);
+        one.near_planned_altitude = fields[4] == "1";
+        aircraft.push_back(std::move(one));
+    }
+    return aircraft;
+}
+
 std::vector<RouteHazard> decode_hazards(const std::string& text) {
     std::vector<RouteHazard> hazards;
     if (text.empty()) return hazards;
@@ -105,13 +134,14 @@ std::string encode_route(const std::string& key, const RouteStatus& status) {
         << scrub(status.hazard_feed) << '\t' << encode_hazards(status.hazards) << '\t'
         << scrub(status.arrival_category) << '\t' << scrub(status.arrival_tempo) << '\t';
     if (status.tailwind_kt) out << *status.tailwind_kt;
-    out << '\n';
+    out << '\t' << scrub(status.traffic_feed) << '\t' << encode_traffic(status.traffic) << '\n';
     return out.str();
 }
 
 std::optional<std::pair<std::string, RouteStatus>> decode_route(const std::string& line) {
     const std::vector<std::string> fields = split(line, '\t');
-    if ((fields.size() != 10 && fields.size() != 12 && fields.size() != 13) || fields[0].empty()) {
+    if ((fields.size() != 10 && fields.size() != 12 && fields.size() != 13 && fields.size() != 15) ||
+        fields[0].empty()) {
         return std::nullopt;
     }
     char* end = nullptr;
@@ -132,10 +162,14 @@ std::optional<std::pair<std::string, RouteStatus>> decode_route(const std::strin
         status.arrival_category = fields[10];
         status.arrival_tempo = fields[11];
     }
-    if (fields.size() == 13 && !fields[12].empty()) {
+    if (fields.size() >= 13 && !fields[12].empty()) {
         char* tail = nullptr;
         const long knots = std::strtol(fields[12].c_str(), &tail, 10);
         if (tail != fields[12].c_str() && *tail == '\0') status.tailwind_kt = static_cast<int>(knots);
+    }
+    if (fields.size() == 15) {
+        status.traffic_feed = fields[13];
+        status.traffic = decode_traffic(fields[14]);
     }
     return std::make_pair(fields[0], std::move(status));
 }

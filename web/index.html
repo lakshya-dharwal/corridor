@@ -26,7 +26,7 @@
     --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  html { scroll-snap-type: y proximity; background: var(--bg); }
+  html { scroll-snap-type: none; background: var(--bg); }
   body {
     margin: 0;
     background: var(--bg);
@@ -55,43 +55,60 @@
   .marks i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
   .marks i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
 
-  .chrome, .ruler-y, .strip { z-index: 5; }
+  .chrome, .strip { z-index: 5; }
   .chrome {
     position: fixed; top: 0; left: 0; right: 0;
     display: flex; justify-content: space-between; align-items: baseline;
-    padding: 28px 40px 0 92px;
+    padding: 18px 28px 0;
     pointer-events: none;
     font-family: var(--mono);
     font-size: 11px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--muted);
+    background: var(--bg);
   }
+  .chrome button {
+    pointer-events: auto;
+    border: 0; background: none; padding: 0; margin: 0;
+    color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit;
+    cursor: pointer;
+  }
+  .chrome button:hover { color: var(--ink); }
   .chrome b { color: var(--ink); font-weight: 500; letter-spacing: 0.14em; margin-right: 12px; }
 
   .ruler-y {
-    position: fixed; left: 30px; top: 50%; transform: translateY(-50%);
-    display: flex; flex-direction: column; gap: 11px;
+    position: fixed; z-index: 6; top: 42px; left: 0; right: 0;
+    display: flex; flex-direction: row; gap: 2px;
+    padding: 0 16px;
+    overflow-x: auto;
+    background: var(--bg);
   }
   .ruler-y button {
-    width: 14px; height: 1px; padding: 8px 0; margin: 0;
-    border: 0; border-radius: 0; background: transparent; cursor: pointer;
-    display: grid; align-items: center;
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 8px 12px;
+    margin: 0;
+    border: 0; border-radius: 0; background: transparent;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    cursor: pointer;
   }
-  .ruler-y button::before {
-    content: ""; height: 1px; width: 10px; background: rgba(244, 241, 234, 0.32);
-  }
-  .ruler-y button.on::before { width: 22px; background: var(--accent); }
+  .ruler-y button.on { color: var(--accent); }
+  .ruler-y button:hover { color: var(--ink); }
 
-  main { position: relative; z-index: 1; }
+  main { position: relative; z-index: 1; padding-top: 176px; }
   .scene {
-    min-height: 100vh;
-    scroll-snap-align: start;
+    min-height: calc(100vh - 176px);
+    scroll-margin-top: 176px;
     display: grid;
     grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
-    align-items: center;
+    align-items: start;
     gap: 56px;
-    padding: 104px 7vw 136px 96px;
+    padding: 28px 7vw 160px 40px;
   }
   .kicker {
     margin: 0 0 18px;
@@ -137,22 +154,25 @@
   .caution { color: var(--caution); }
   .fail { color: var(--fail); }
 
-  .hero {
-    grid-template-areas: "copy object" "controls object";
-    align-items: center;
+  .hero .frame { justify-self: end; }
+  form.dock {
+    position: fixed; z-index: 6; top: 82px; left: 0; right: 0;
+    display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px;
+    margin: 0; max-width: none;
+    padding: 8px 28px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
   }
-  .hero .copy { grid-area: copy; align-self: end; }
-  .hero .frame { grid-area: object; }
-  .hero .controls { grid-area: controls; align-self: start; }
-  form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin-top: 28px; max-width: 460px; }
   label { display: grid; gap: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-  label.wide { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; text-transform: uppercase; }
+  label.wide { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; text-transform: uppercase; }
+  form.dock label { flex: 1 1 140px; }
   select, input[type="number"] {
+    color-scheme: dark;
     width: 100%;
     padding: 10px 12px;
     border: 1px solid var(--line);
     border-radius: 6px;
-    background: transparent;
+    background: #05060a;
     color: var(--ink);
     font-family: var(--mono);
     font-size: 13px;
@@ -173,8 +193,8 @@
   }
   input[type="checkbox"] { accent-color: var(--ink); width: 14px; height: 14px; }
   button[type="submit"] {
-    grid-column: 1 / -1;
-    padding: 12px 14px;
+    flex: 0 0 auto;
+    padding: 10px 14px;
     border: 1px solid var(--line-strong);
     border-radius: 6px;
     background: transparent;
@@ -188,7 +208,7 @@
   }
   button[type="submit"]:hover { border-color: var(--ink); }
   button[type="submit"]:disabled { opacity: 0.45; cursor: default; }
-  #error { grid-column: 1 / -1; min-height: 1.2em; margin: 0; font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em; color: var(--fail); }
+  #error { flex: 1 0 100%; min-height: 0; margin: 0; font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em; color: var(--fail); }
 
   .frame {
     width: min(460px, 100%);
@@ -237,12 +257,20 @@
   .raw { margin: 8px 0 0; font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--muted); word-break: break-word; }
 
   .hit-list { margin: 18px 0 0; padding: 0; list-style: none; max-width: 26rem; }
-  .hit-list li { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .hit-list li { padding: 0; border-top: 1px solid var(--line); font-size: 14px; }
   .hit-list li:first-child { border-top: 0; }
+  .hit-list button.row, .hit-list li.note {
+    display: flex; justify-content: space-between; gap: 16px;
+    width: 100%; padding: 10px 0;
+    border: 0; background: none; color: inherit;
+    font: inherit; text-align: left; cursor: pointer;
+  }
+  .hit-list li.note { cursor: default; }
+  .hit-list button.row:hover { color: var(--ink); }
   .hit-list span { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--muted); white-space: nowrap; }
   .hit-list span.fail { color: var(--fail); }
 
-  #map { height: min(64vh, 620px); background: var(--bg); border-radius: 4px; }
+  #map { height: min(52vh, 520px); min-height: 280px; background: var(--bg); border-radius: 4px; }
   .leaflet-container { background: var(--bg); font-family: var(--mono); }
   .leaflet-tile-pane { filter: grayscale(1) brightness(0.22) contrast(1.5); }
   .leaflet-bar { border: 1px solid var(--line) !important; border-radius: 4px !important; box-shadow: none !important; }
@@ -269,9 +297,9 @@
     position: fixed; left: 0; right: 0; bottom: 0;
     background: var(--bg);
     border-top: 1px solid var(--line);
-    padding: 10px 40px 14px 92px;
+    padding: 10px 28px 14px;
   }
-  .scrub { display: flex; align-items: flex-end; height: 16px; margin-bottom: 8px; }
+  .scrub { display: flex; align-items: flex-end; height: 28px; margin-bottom: 8px; cursor: pointer; touch-action: none; }
   .scrub i { flex: 1; height: 6px; border-left: 1px solid rgba(244, 241, 234, 0.22); display: block; }
   .scrub i.on { border-left-color: rgba(244, 241, 234, 0.7); height: 10px; }
   .scrub i.now { border-left-color: var(--accent); height: 14px; }
@@ -288,10 +316,11 @@
   #liveAlert.fail { color: var(--fail); }
 
   @media (max-width: 900px) {
-    .ruler-y { display: none; }
-    .chrome { padding: 22px 22px 0; }
-    .scene { grid-template-columns: 1fr; gap: 32px; padding: 104px 22px 150px; align-items: start; }
-    .hero { grid-template-areas: "copy" "object" "controls"; }
+    .chrome { padding: 16px 16px 0; }
+    .ruler-y { top: 40px; padding: 0 8px; }
+    form.dock { top: 78px; padding: 8px 16px 10px; }
+    main { padding-top: 228px; }
+    .scene { grid-template-columns: 1fr; gap: 32px; min-height: calc(100vh - 228px); padding: 20px 22px 170px; align-items: start; scroll-margin-top: 228px; }
     h1, .giant { font-size: clamp(2.7rem, 12vw, 4rem); }
     .frame, .stations { justify-self: stretch; }
     h1 { max-width: none; }
@@ -305,10 +334,19 @@
 <div class="glow" aria-hidden="true"></div>
 <div class="marks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 <header class="chrome">
-  <div>Corridor</div>
+  <button type="button" id="home">Corridor</button>
   <div><b id="sceneNum">01</b><span id="sceneName">Blood</span></div>
 </header>
 <nav class="ruler-y" id="rulerY" aria-label="Scenes"></nav>
+<form id="plan" class="dock">
+  <label>From <select id="from"></select></label>
+  <label>To <select id="to"></select></label>
+  <label>Cruise ft <input id="alt" type="number" value="13500" min="0" max="60000" step="500"></label>
+  <label>Airspeed kt <input id="gs" type="number" value="140" min="30" max="700" step="10"></label>
+  <label class="wide"><input id="pressurized" type="checkbox"> Pressurized cabin</label>
+  <button id="go" type="submit">Brief this route</button>
+  <p id="error" role="alert"></p>
+</form>
 
 <main>
   <section class="scene hero" data-scene="01" data-name="Blood">
@@ -316,17 +354,6 @@
       <p class="kicker">Blood</p>
       <h1>Your <em>blood</em> at altitude.</h1>
       <p class="lede">One route. The oxygen it leaves you. The rule that follows.</p>
-    </div>
-    <div class="controls">
-      <form id="plan">
-        <label>From <select id="from"></select></label>
-        <label>To <select id="to"></select></label>
-        <label>Cruise ft <input id="alt" type="number" value="13500" min="0" max="60000" step="500"></label>
-        <label>Airspeed kt <input id="gs" type="number" value="140" min="30" max="700" step="10"></label>
-        <label class="wide"><input id="pressurized" type="checkbox"> Pressurized cabin</label>
-        <button id="go" type="submit">Brief this route</button>
-        <p id="error" role="alert"></p>
-      </form>
       <p class="fine">Educational estimate for a healthy adult at rest. Not medical advice. Not for flight planning.</p>
     </div>
     <div class="frame">
@@ -376,6 +403,7 @@
       <p class="giant accent" id="lowSpo2">—<small>%</small></p>
       <p class="lede" id="dropLede">Lowest estimated saturation along the flight.</p>
       <p class="fine" id="fatigueLine">Fatigue —</p>
+      <p class="fine" id="trustLine"></p>
     </div>
     <div class="frame">
       <div class="frame-head">
@@ -430,15 +458,31 @@
     </div>
   </section>
 
-  <section class="scene" data-scene="08" data-name="Corridor">
+  <section class="scene" data-scene="08" data-name="Traffic">
+    <div>
+      <p class="kicker">Right now</p>
+      <p class="giant" id="trafficN">—<small>NOW</small></p>
+      <p class="lede" id="trafficLede">Equipped aircraft inside the corridor at this moment.</p>
+      <ul class="hit-list" id="trafficList"></ul>
+    </div>
+    <div class="frame">
+      <div class="frame-head">
+        <p class="kicker">Along the route</p>
+        <p class="kicker">Accent = near your altitude</p>
+      </div>
+      <div class="dots line" id="trafficDots" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="09" data-name="Map">
     <div>
       <p class="kicker">Corridor</p>
       <h1>Where the <em>blood</em> is low.</h1>
-      <p class="lede">Accent is the stretch under 90. The outlines are hazard areas.</p>
-      <p class="fine">Weather and forecasts: aviationweather.gov. Winds: Open-Meteo, NOAA GFS. Tiles: OpenStreetMap.</p>
+      <p class="lede">Accent is the stretch under 90. The outlines are hazard areas. Dots are aircraft there now.</p>
+      <p class="fine">Weather and forecasts: aviationweather.gov. Winds: Open-Meteo, NOAA GFS. Traffic: OpenSky Network, ADS-B only. Tiles: OpenStreetMap.</p>
     </div>
     <div class="frame">
-      <div id="map" role="img" aria-label="Route and hazard areas"></div>
+      <div id="map" aria-label="Route, hazard areas, and aircraft in the corridor now"></div>
     </div>
   </section>
 </main>
@@ -652,7 +696,19 @@ function renderSources(sources) {
   line.textContent = "wx " + sourceClock(sources.weather)
     + " · hazards " + sourceClock(sources.hazards)
     + " · taf " + sourceClock(sources.taf)
-    + " · wind " + sourceClock(sources.wind);
+    + " · wind " + sourceClock(sources.wind)
+    + " · traffic " + sourceClock(sources.traffic);
+}
+
+function renderTrust(trust) {
+  const line = $("trustLine");
+  if (!trust) {
+    line.textContent = "";
+    return;
+  }
+  const shift = trust.wind_shift_min == null ? "no wind check" : Math.round(trust.wind_shift_min) + " min";
+  line.textContent = "Trust " + trust.score + ". Off published SpO2 by " + trust.model_gap_pts
+    + " pts. Wind moves the oxygen call " + shift + ". Feeds " + trust.feeds + ".";
 }
 
 function paintHero(pct) {
@@ -695,6 +751,7 @@ function render(briefing) {
   $("lowSpo2").firstChild.textContent = Math.round(phys.min_spo2_pct);
   $("dropLede").textContent = Math.round(phys.minutes_below_90_pct) + " min under 90%.";
   $("fatigueLine").textContent = "Fatigue " + Math.round(phys.fatigue_score) + " / 100";
+  renderTrust(briefing.trust);
   const drop = dropRow(profile);
   paintDots($("dropDots"), drop.columns, drop.cells, true);
   const total = Math.round(route.duration_min);
@@ -716,6 +773,7 @@ function render(briefing) {
 
   renderStations(briefing.weather, briefing.arrival);
   renderHits(briefing);
+  renderTraffic(briefing);
   drawMap(briefing, state.hazards);
   onScroll();
 }
@@ -804,14 +862,89 @@ function renderHits(briefing) {
   clear(list);
   const shown = hits.slice(0, 5);
   for (const h of shown) {
-    const item = el("li");
-    item.appendChild(el("b", h.kind + " " + h.hazard));
     const label = h.at_your_altitude === true ? "At altitude" : h.at_your_altitude === false ? "Clear of you" : "No band";
-    item.appendChild(el("span", label, h.at_your_altitude === true ? "fail" : ""));
-    list.appendChild(item);
+    list.appendChild(rowButton(h.kind + " " + h.hazard, label, h.at_your_altitude === true ? "fail" : "", () => showPin("hazards", h.id)));
   }
-  if (hits.length > shown.length) list.appendChild(el("li", "+" + (hits.length - shown.length) + " more"));
-  if (!hits.length) list.appendChild(el("li", feed ? "None of the active areas touch this route." : "No hazard feed."));
+  if (hits.length > shown.length) list.appendChild(el("li", "+" + (hits.length - shown.length) + " more", "note"));
+  if (!hits.length) list.appendChild(el("li", feed ? "None of the active areas touch this route." : "No hazard feed.", "note"));
+}
+
+function agePhrase(seconds) {
+  if (seconds == null) return "";
+  if (seconds < 90) return seconds + " sec old";
+  return Math.round(seconds / 60) + " min old";
+}
+
+function renderTraffic(briefing) {
+  const feed = briefing.traffic_feed;
+  const aircraft = briefing.traffic_on_route || [];
+  const near = aircraft.filter((a) => a.near_planned_altitude);
+  $("trafficN").firstChild.textContent = feed ? String(near.length) : "—";
+  const lede = $("trafficLede");
+  if (!feed) {
+    lede.textContent = "No traffic feed.";
+  } else if (feed.status === "stale") {
+    lede.textContent = "This picture is " + agePhrase(feed.age_sec)
+      + ", too old to treat as current. It is where those aircraft were, not who you will meet.";
+  } else if (feed.status === "partial" || feed.route_covered === false) {
+    lede.textContent = "The feed did not search this whole route, so a short list is not an empty sky. "
+      + aircraft.length + " equipped aircraft were inside the part it did see, " + agePhrase(feed.age_sec) + ".";
+  } else if (!aircraft.length) {
+    lede.textContent = "No equipped aircraft inside the corridor now. Aircraft that are not broadcasting are not shown. This is not who you will meet.";
+  } else {
+    lede.textContent = aircraft.length + " equipped aircraft inside the corridor now, " + agePhrase(feed.age_sec)
+      + ". " + near.length + " within 3000 ft of the altitude this plan uses there. This is where they are now, not who you will meet.";
+  }
+  const ordered = [...aircraft].sort((a, b) => {
+    if (a.near_planned_altitude !== b.near_planned_altitude) return a.near_planned_altitude ? -1 : 1;
+    return a.along_nm - b.along_nm;
+  });
+  const row = {
+    columns: Math.max(ordered.length, 8),
+    cells: (ordered.length ? ordered : Array.from({ length: 8 }, () => null)).map((a) => ({
+      on: !!a,
+      blood: !!(a && a.near_planned_altitude),
+      o: !a ? 1 : a.near_planned_altitude ? 1 : 0.34,
+      s: !a ? 0.45 : a.near_planned_altitude ? 1 : 0.62,
+    })),
+  };
+  paintDots($("trafficDots"), row.columns, row.cells, true);
+  const list = $("trafficList");
+  clear(list);
+  const shown = ordered.slice(0, 6);
+  for (const a of shown) {
+    const name = a.callsign || a.icao.toUpperCase();
+    const alt = a.alt_ft == null ? "altitude unknown" : Math.round(a.alt_ft).toLocaleString() + " ft";
+    list.appendChild(rowButton(name + " · " + alt, Math.round(a.along_nm) + " nm", a.near_planned_altitude ? "fail" : "", () => showPin("aircraft", a.icao)));
+  }
+  if (ordered.length > shown.length) list.appendChild(el("li", "+" + (ordered.length - shown.length) + " more", "note"));
+  if (!ordered.length) list.appendChild(el("li", feed ? "None inside the corridor." : "No traffic feed.", "note"));
+}
+
+function rowButton(title, detail, detailClass, onClick) {
+  const item = el("li");
+  const button = el("button", undefined, "row");
+  button.type = "button";
+  button.appendChild(el("b", title));
+  button.appendChild(el("span", detail, detailClass));
+  button.addEventListener("click", onClick);
+  item.appendChild(button);
+  return item;
+}
+
+const pins = { hazards: new Map(), aircraft: new Map() };
+function showPin(kind, id) {
+  const scene = document.querySelector('[data-scene="09"]');
+  if (scene) scene.scrollIntoView({ behavior: "smooth", block: "start" });
+  const layer = pins[kind].get(id);
+  setTimeout(() => {
+    if (!map) return;
+    map.invalidateSize();
+    if (!layer) return;
+    const latlng = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
+    map.panTo(latlng);
+    layer.openPopup();
+  }, 450);
 }
 
 function initMap() {
@@ -834,6 +967,8 @@ function drawMap(briefing, allHazards) {
   const held = window.scrollY;
   hazardLayer.clearLayers();
   routeLayer.clearLayers();
+  pins.hazards.clear();
+  pins.aircraft.clear();
   const onRoute = new Map(briefing.hazards_on_route.map((h) => [h.id, h]));
   for (const area of allHazards.areas) {
     const hit = onRoute.get(area.id);
@@ -852,6 +987,7 @@ function drawMap(briefing, allHazards) {
     popup.appendChild(el("div", band));
     if (hit) popup.appendChild(el("div", atYou ? "At your altitude" : "On the route, not at your altitude"));
     shape.bindPopup(popup);
+    pins.hazards.set(area.id, shape);
   }
 
   const profile = briefing.profile;
@@ -875,6 +1011,26 @@ function drawMap(briefing, allHazards) {
     }
   }
   flush(null);
+  for (const aircraft of briefing.traffic_on_route || []) {
+    const name = aircraft.callsign || aircraft.icao.toUpperCase();
+    const nearYou = aircraft.near_planned_altitude === true;
+    const marker = L.circleMarker([aircraft.lat, aircraft.lon], {
+      radius: nearYou ? 6 : 4,
+      color: nearYou ? ACCENT : INK,
+      weight: 2,
+      fillColor: nearYou ? ACCENT : "#05060a",
+      fillOpacity: nearYou ? 0.9 : 0.35,
+    }).addTo(routeLayer);
+    const popup = el("div");
+    popup.appendChild(el("b", name));
+    const alt = aircraft.alt_ft == null ? "Altitude unknown" : Math.round(aircraft.alt_ft).toLocaleString() + " ft now";
+    popup.appendChild(el("div", alt));
+    popup.appendChild(el("div", nearYou ? "Near the altitude this plan uses here" : "Inside the corridor, other altitude"));
+    const stale = briefing.traffic_feed && briefing.traffic_feed.status === "stale";
+    popup.appendChild(el("div", stale ? "Picture is stale" : "Where it is now, not later"));
+    marker.bindPopup(popup);
+    pins.aircraft.set(aircraft.icao, marker);
+  }
   const ends = [[profile[0].lat, profile[0].lon, briefing.route.from], [profile[profile.length - 1].lat, profile[profile.length - 1].lon, briefing.route.to]];
   const line = L.polyline(profile.map((p) => [p.lat, p.lon]), { opacity: 0, weight: 0 }).addTo(routeLayer);
   for (const [lat, lon, name] of ends) {
@@ -900,19 +1056,8 @@ function scrubPaint(t) {
   });
 }
 
-function onScroll() {
-  const scenes = [...document.querySelectorAll(".scene")];
-  const mid = scrollY + innerHeight * 0.45;
-  let current = scenes[0];
-  for (const scene of scenes) {
-    if (scene.offsetTop <= mid) current = scene;
-  }
-  $("sceneNum").textContent = current.dataset.scene;
-  $("sceneName").textContent = current.dataset.name;
-  [...$("rulerY").children].forEach((button, i) => button.classList.toggle("on", scenes[i] === current));
-
-  const max = document.documentElement.scrollHeight - innerHeight;
-  const t = max <= 0 ? 0 : clamp(scrollY / max, 0, 1);
+let scrubUntil = 0;
+function paintReadout(t) {
   scrubPaint(t);
   const profile = state.briefing && state.briefing.profile;
   if (!profile || !profile.length) return;
@@ -927,24 +1072,69 @@ function onScroll() {
   const haz = $("liveHaz");
   haz.textContent = inside ? "In" : "Clear";
   haz.className = inside ? "fail" : "pass";
-  if (current.dataset.scene === "08" && map) map.invalidateSize();
+}
+function bindScrub() {
+  const host = $("scrub");
+  host.setAttribute("role", "slider");
+  host.setAttribute("aria-label", "Position along the flight");
+  host.tabIndex = 0;
+  const seek = (clientX) => {
+    const rect = host.getBoundingClientRect();
+    const t = clamp((clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+    scrubUntil = Date.now() + 1200;
+    host.setAttribute("aria-valuenow", String(Math.round(t * 100)));
+    paintReadout(t);
+  };
+  host.addEventListener("pointerdown", (event) => {
+    host.setPointerCapture(event.pointerId);
+    seek(event.clientX);
+  });
+  host.addEventListener("pointermove", (event) => {
+    if (host.hasPointerCapture(event.pointerId)) seek(event.clientX);
+  });
+}
+
+function onScroll() {
+  const scenes = [...document.querySelectorAll(".scene")];
+  const mid = scrollY + innerHeight * 0.45;
+  let current = scenes[0];
+  for (const scene of scenes) {
+    if (scene.offsetTop <= mid) current = scene;
+  }
+  $("sceneNum").textContent = current.dataset.scene;
+  $("sceneName").textContent = current.dataset.name;
+  [...$("rulerY").children].forEach((button, i) => button.classList.toggle("on", scenes[i] === current));
+
+  if (Date.now() >= scrubUntil) {
+    const max = document.documentElement.scrollHeight - innerHeight;
+    const t = max <= 0 ? 0 : clamp(scrollY / max, 0, 1);
+    paintReadout(t);
+  }
+  if (current.dataset.scene === "09" && map) map.invalidateSize();
 }
 
 let socketQuiet = true;
+let watchTimer = null;
 function setAlert(text, hot) {
   const node = $("liveAlert");
   node.textContent = text;
   node.className = hot ? "fail" : "";
 }
 function watchRoute(query) {
+  if (watchTimer) { clearTimeout(watchTimer); watchTimer = null; }
   if (socket) { socket.onclose = null; socket.close(); }
   socketQuiet = true;
   setAlert("Opening the watch.", false);
   const scheme = location.protocol === "https:" ? "wss://" : "ws://";
-  socket = new WebSocket(scheme + location.host + "/alerts?" + query);
-  socket.onopen = () => setAlert("Watching this route.", false);
-  socket.onclose = () => setAlert("Alert connection closed.", false);
-  socket.onmessage = (event) => {
+  const current = new WebSocket(scheme + location.host + "/alerts?" + query);
+  socket = current;
+  current.onopen = () => setAlert("Watching this route.", false);
+  current.onclose = () => {
+    if (socket !== current) return;
+    setAlert("Watch dropped. Reconnecting.", false);
+    watchTimer = setTimeout(() => watchRoute(query), 2000);
+  };
+  current.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "alert") {
       const text = (message.changes || []).join(" · ") || "Route picture changed.";
@@ -1015,7 +1205,7 @@ function buildRuler() {
   for (const scene of document.querySelectorAll(".scene")) {
     const button = document.createElement("button");
     button.type = "button";
-    button.setAttribute("aria-label", scene.dataset.name);
+    button.textContent = scene.dataset.name;
     button.addEventListener("click", () => scene.scrollIntoView({ behavior: "smooth", block: "start" }));
     nav.appendChild(button);
   }
@@ -1023,6 +1213,10 @@ function buildRuler() {
 
 async function start() {
   buildRuler();
+  bindScrub();
+  $("home").addEventListener("click", () => {
+    document.querySelector('[data-scene="01"]').scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   paintHero(null);
   paintDots($("trackDots"), 16, emptyGrid(256, 16).cells);
   paintDots($("altDots"), 24, emptyGrid(288, 24).cells);
@@ -1030,6 +1224,7 @@ async function start() {
   paintDots($("crewDots"), 8, emptyGrid(16, 8).cells);
   paintDots($("paxDots"), 8, emptyGrid(16, 8).cells);
   paintDots($("hitDots"), 10, emptyGrid(10, 10).cells, true);
+  paintDots($("trafficDots"), 8, emptyGrid(8, 8).cells, true);
   scrubPaint(0);
   initMap();
   refreshFeeds();
@@ -1048,6 +1243,7 @@ async function start() {
     $("from").value = codes.includes("KPHX") ? "KPHX" : codes[0];
     $("to").value = codes.includes("KIXD") ? "KIXD" : codes[codes.length - 1];
     await brief(true);
+    if (state.briefing && !state.briefing.weather) setTimeout(() => brief(true), 8000);
   } catch (error) {
     $("error").textContent = error.message;
   }

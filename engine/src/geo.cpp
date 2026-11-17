@@ -66,6 +66,54 @@ double distance_to_segment_nm(LatLon p, LatLon a, LatLon b) {
     return std::fabs(cross) * kEarthRadiusNm;
 }
 
+RouteProjection project_onto_route(LatLon p, const std::vector<LatLon>& waypoints) {
+    RouteProjection best;
+    if (waypoints.empty()) return best;
+    if (waypoints.size() == 1) {
+        best.cross_nm = distance_nm(p, waypoints.front());
+        return best;
+    }
+
+    double walked = 0.0;
+    bool any = false;
+    for (std::size_t i = 0; i + 1 < waypoints.size(); ++i) {
+        const LatLon a = waypoints[i];
+        const LatLon b = waypoints[i + 1];
+        const double leg_nm = distance_nm(a, b);
+        double along_leg = 0.0;
+        double cross = 0.0;
+        const double d12 = angular_distance(a, b);
+        const double d13 = angular_distance(a, p);
+        if (d12 < 1e-12 || d13 < 1e-12) {
+            cross = d13 * kEarthRadiusNm;
+        } else {
+            const double delta = bearing_rad(a, p) - bearing_rad(a, b);
+            if (std::cos(delta) < 0.0) {
+                cross = d13 * kEarthRadiusNm;  // closest point is the start of the leg
+            } else {
+                const double cross_rad =
+                    std::asin(std::clamp(std::sin(d13) * std::sin(delta), -1.0, 1.0));
+                const double along_rad = std::acos(
+                    std::clamp(std::cos(d13) / std::max(1e-12, std::cos(cross_rad)), -1.0, 1.0));
+                if (along_rad >= d12) {
+                    along_leg = leg_nm;
+                    cross = distance_nm(p, b);
+                } else {
+                    along_leg = along_rad * kEarthRadiusNm;
+                    cross = std::fabs(cross_rad) * kEarthRadiusNm;
+                }
+            }
+        }
+        if (!any || cross < best.cross_nm) {
+            any = true;
+            best.cross_nm = cross;
+            best.along_nm = walked + along_leg;
+        }
+        walked += leg_nm;
+    }
+    return best;
+}
+
 double route_length_nm(const std::vector<LatLon>& waypoints) {
     double total = 0.0;
     for (std::size_t i = 0; i + 1 < waypoints.size(); ++i) {

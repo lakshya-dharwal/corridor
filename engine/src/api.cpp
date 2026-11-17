@@ -1,4 +1,5 @@
 #include "corridor/api.hpp"
+#include "corridor/trust.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -145,16 +146,22 @@ struct Evaluated {
     std::int64_t hazards_epoch = 0;
     std::int64_t taf_epoch = 0;
     std::int64_t wind_epoch = 0;
+    bool has_traffic = false;
+    bool traffic_fresh = false;
+    bool route_covered = false;
+    std::int64_t traffic_age = 0;
+    std::vector<TrafficHit> traffic_hits;
+    std::int64_t traffic_epoch = 0;
 };
 
 std::string sources_json(std::int64_t evaluated_at, std::int64_t weather, std::int64_t hazards,
-                         std::int64_t taf, std::int64_t wind) {
+                         std::int64_t taf, std::int64_t wind, std::int64_t traffic) {
     auto field = [](std::int64_t value) {
         return value > 0 ? std::to_string(value) : std::string("null");
     };
     return "{\"evaluated_at\": " + field(evaluated_at) + ", \"weather\": " + field(weather) +
            ", \"hazards\": " + field(hazards) + ", \"taf\": " + field(taf) +
-           ", \"wind\": " + field(wind) + "}";
+           ", \"wind\": " + field(wind) + ", \"traffic\": " + field(traffic) + "}";
 }
 
 // Throws ParamError for a bad request and std::invalid_argument for a plan the
@@ -162,7 +169,7 @@ std::string sources_json(std::int64_t evaluated_at, std::int64_t weather, std::i
 Evaluated evaluate(const Request& request, const AirportTable& airports,
                    const WeatherSnapshot* weather, std::int64_t now_epoch,
                    const HazardSnapshot* hazards, const TafSnapshot* tafs,
-                   const WindSnapshot* winds) {
+                   const WindSnapshot* winds, const TrafficSnapshot* traffic) {
     Evaluated result;
     FlightPlan& plan = result.plan;
     plan.departure = airport_param(request, "from", airports, weather);
@@ -221,8 +228,21 @@ Evaluated evaluate(const Request& request, const AirportTable& airports,
     if (hazards) result.hazards_epoch = hazards->generated_epoch;
     if (tafs) result.taf_epoch = tafs->generated_epoch;
     if (winds) result.wind_epoch = winds->generated_epoch;
+    if (traffic) result.traffic_epoch = traffic->generated_epoch;
 
     result.briefing = build_briefing(plan, active);
+    if (traffic) {
+        result.has_traffic = true;
+        result.traffic_age = std::max<std::int64_t>(0, now_epoch - traffic->generated_epoch);
+        result.traffic_fresh =
+            traffic->generated_epoch > 0 && result.traffic_age <= kStaleTrafficSeconds;
+        std::vector<LatLon> waypoints;
+        waypoints.push_back(plan.departure.pos);
+        waypoints.insert(waypoints.end(), plan.via.begin(), plan.via.end());
+        waypoints.push_back(plan.destination.pos);
+        result.route_covered = route_inside_coverage(*traffic, waypoints);
+        result.traffic_hits = traffic_on_route(*traffic, waypoints, result.briefing.profile);
+    }
     if (tafs) {
         result.has_taf = true;
         result.taf_age = std::max<std::int64_t>(0, now_epoch - tafs->generated_epoch);
@@ -280,6 +300,52 @@ std::string wind_json(const Evaluated& e) {
 const char* hazard_feed_status(const Evaluated& e) {
     if (!e.has_hazard_feed) return "not configured";
     return e.hazard_feed_age <= kStaleHazardSeconds ? "ok" : "stale";
+}
+
+const char* traffic_feed_status(const Evaluated& e) {
+    if (!e.has_traffic) return "not configured";
+    if (!e.traffic_fresh) return "stale";
+    if (!e.route_covered) return "partial";
+    return "ok";
+}
+
+std::string traffic_json(const Evaluated& e) {
+    int near = 0;
+    for (const TrafficHit& hit : e.traffic_hits) {
+        if (hit.near_planned_altitude) ++near;
+    }
+    std::ostringstream out;
+    out << std::fixed << "{\"status\": \"" << traffic_feed_status(e) << "\", \"age_sec\": "
+        << e.traffic_age << ", \"coverage\": \"adsb_equipped\", \"route_covered\": "
+        << (e.route_covered ? "true" : "false") << ", \"on_route\": " << e.traffic_hits.size()
+        << ", \"near_planned_altitude\": " << near << "}";
+    return out.str();
+}
+
+std::string traffic_list_json(const Evaluated& e) {
+    std::ostringstream out;
+    out << std::fixed << "[";
+    for (std::size_t i = 0; i < e.traffic_hits.size(); ++i) {
+        const TrafficHit& hit = e.traffic_hits[i];
+        const TrafficAircraft& aircraft = hit.aircraft;
+        out << (i ? ",\n    " : "\n    ") << "{\"icao\": \"" << json_escape(aircraft.icao)
+            << "\", \"callsign\": "
+            << (aircraft.callsign.empty() ? "null" : "\"" + json_escape(aircraft.callsign) + "\"")
+            << ", \"lat\": " << std::setprecision(4) << aircraft.pos.lat_deg << ", \"lon\": "
+            << aircraft.pos.lon_deg << ", \"alt_ft\": " << optional_json(aircraft.alt_ft, 0)
+            << ", \"groundspeed_kt\": " << optional_json(aircraft.groundspeed_kt, 0)
+            << ", \"track_deg\": " << optional_json(aircraft.track_deg, 0)
+            << ", \"seen_epoch\": " << aircraft.seen_epoch << ", \"along_nm\": "
+            << std::setprecision(1) << hit.along_nm << ", \"cross_track_nm\": " << hit.cross_nm
+            << ", \"near_planned_altitude\": " << (hit.near_planned_altitude ? "true" : "false")
+            << "}";
+    }
+    out << (e.traffic_hits.empty() ? "" : "\n  ") << "]";
+    return out.str();
+}
+
+std::string traffic_label(const RouteTraffic& aircraft) {
+    return aircraft.callsign.empty() ? aircraft.icao : aircraft.callsign;
 }
 
 std::string describe(const RouteHazard& hazard) {
@@ -377,13 +443,23 @@ const AirportTable& demo_airports() {
 Response briefing_endpoint(const Request& request, const AirportTable& airports,
                            const WeatherSnapshot* weather, std::int64_t now_epoch,
                            const HazardSnapshot* hazards, const TafSnapshot* tafs,
-                           const WindSnapshot* winds) {
+                           const WindSnapshot* winds, const TrafficSnapshot* traffic) {
     try {
-        const Evaluated e = evaluate(request, airports, weather, now_epoch, hazards, tafs, winds);
+        const Evaluated e =
+            evaluate(request, airports, weather, now_epoch, hazards, tafs, winds, traffic);
 
         std::vector<std::pair<std::string, std::string>> extra;
         extra.emplace_back("sources", sources_json(e.evaluated_at, e.weather_epoch, e.hazards_epoch,
-                                                   e.taf_epoch, e.wind_epoch));
+                                                   e.taf_epoch, e.wind_epoch, e.traffic_epoch));
+        const bool weather_stale =
+            weather && !((e.departure_weather && is_fresh(*e.departure_weather, now_epoch)) ||
+                         (e.destination_weather && is_fresh(*e.destination_weather, now_epoch)));
+        extra.emplace_back(
+            "trust",
+            trust_json(trust_report(winds, now_epoch, weather != nullptr, weather_stale,
+                                    tafs != nullptr, e.has_taf && !e.taf_fresh,
+                                    e.has_wind && !e.wind_fresh, e.has_traffic,
+                                    e.has_traffic && !e.traffic_fresh)));
         if (weather) {
             extra.emplace_back(
                 "weather",
@@ -401,6 +477,10 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
         }
         if (e.has_taf) extra.emplace_back("arrival", arrival_json(e));
         if (e.has_wind) extra.emplace_back("wind", wind_json(e));
+        if (e.has_traffic) {
+            extra.emplace_back("traffic_feed", traffic_json(e));
+            extra.emplace_back("traffic_on_route", traffic_list_json(e));
+        }
 
         Response response;
         response.body = to_json(e.briefing, e.plan, e.step, extra);
@@ -415,10 +495,11 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
 std::optional<RouteStatus> route_status(const Request& request, const AirportTable& airports,
                                         const WeatherSnapshot* weather, std::int64_t now_epoch,
                                         const HazardSnapshot* hazards, Response* error,
-                                        const TafSnapshot* tafs, const WindSnapshot* winds) {
+                                        const TafSnapshot* tafs, const WindSnapshot* winds,
+                                        const TrafficSnapshot* traffic) {
     try {
         const Evaluated e =
-            evaluate(request, airports, weather, now_epoch, hazards, tafs, winds);
+            evaluate(request, airports, weather, now_epoch, hazards, tafs, winds, traffic);
 
         RouteStatus status;
         status.departure = e.plan.departure.icao;
@@ -442,11 +523,20 @@ std::optional<RouteStatus> route_status(const Request& request, const AirportTab
         status.passenger_oxygen_required = e.briefing.oxygen.passenger_oxygen_required;
         status.min_spo2 = e.briefing.min_spo2;
         status.hazard_feed = hazard_feed_status(e);
+        status.traffic_feed = traffic_feed_status(e);
         status.evaluated_at = e.evaluated_at;
         status.weather_epoch = e.weather_epoch;
         status.hazards_epoch = e.hazards_epoch;
         status.taf_epoch = e.taf_epoch;
         status.wind_epoch = e.wind_epoch;
+        status.traffic_epoch = e.traffic_epoch;
+        if (std::string(status.traffic_feed) == "ok") {
+            for (const TrafficHit& hit : e.traffic_hits) {
+                status.traffic.push_back({hit.aircraft.icao, hit.aircraft.callsign,
+                                          hit.aircraft.alt_ft, hit.along_nm,
+                                          hit.near_planned_altitude});
+            }
+        }
         for (const HazardHit& hit : e.briefing.hazard_hits) {
             status.hazards.push_back({hit.hazard.id, hit.hazard.kind + " " + hit.hazard.hazard_type,
                                       hit.hazard.low_ft, hit.hazard.high_ft, hit.enter_min,
@@ -503,6 +593,41 @@ std::vector<std::string> diff_route_status(const RouteStatus& before, const Rout
             changes.push_back("Hazard data is current again");
         }
     }
+
+    // Per-aircraft alerts only while both pictures fully cover the route.
+    // A stale or partial feed would otherwise announce every aircraft as gone.
+    if (before.traffic_feed == "ok" && after.traffic_feed == "ok") {
+        auto contains_aircraft = [](const std::vector<RouteTraffic>& list, const std::string& icao) {
+            return std::any_of(list.begin(), list.end(),
+                               [&](const RouteTraffic& aircraft) { return aircraft.icao == icao; });
+        };
+        for (const RouteTraffic& aircraft : after.traffic) {
+            if (contains_aircraft(before.traffic, aircraft.icao)) continue;
+            std::ostringstream line;
+            line << std::fixed << std::setprecision(0) << "Aircraft " << traffic_label(aircraft)
+                 << " is inside the corridor now";
+            if (aircraft.alt_ft) line << " at " << *aircraft.alt_ft << " ft";
+            line << ", " << aircraft.along_nm << " nm along the route";
+            changes.push_back(line.str());
+        }
+        for (const RouteTraffic& aircraft : before.traffic) {
+            if (!contains_aircraft(after.traffic, aircraft.icao)) {
+                changes.push_back("Aircraft " + traffic_label(aircraft) +
+                                  " is no longer inside the corridor");
+            }
+        }
+    }
+    if (before.traffic_feed != after.traffic_feed) {
+        if (after.traffic_feed == "stale") {
+            changes.push_back("Traffic picture is now stale");
+        } else if (after.traffic_feed == "ok" && before.traffic_feed == "stale") {
+            changes.push_back("Traffic picture is current again");
+        } else if (after.traffic_feed == "partial") {
+            changes.push_back("Traffic picture does not cover this whole route");
+        } else if (after.traffic_feed == "ok" && before.traffic_feed == "partial") {
+            changes.push_back("Traffic picture covers this route");
+        }
+    }
     return changes;
 }
 
@@ -532,9 +657,20 @@ std::string route_status_json(const RouteStatus& status) {
             << optional_json(hazard.exit_min, 0) << ", \"at_your_altitude\": "
             << (hazard.at_altitude ? (*hazard.at_altitude ? "true" : "false") : "null") << "}";
     }
+    out << "], \"traffic_feed\": \"" << json_escape(status.traffic_feed) << "\", \"traffic\": [";
+    for (std::size_t i = 0; i < status.traffic.size(); ++i) {
+        const RouteTraffic& aircraft = status.traffic[i];
+        out << (i ? ", " : "") << "{\"icao\": \"" << json_escape(aircraft.icao)
+            << "\", \"callsign\": "
+            << (aircraft.callsign.empty() ? "null" : "\"" + json_escape(aircraft.callsign) + "\"")
+            << ", \"alt_ft\": " << optional_json(aircraft.alt_ft, 0) << ", \"along_nm\": "
+            << std::fixed << std::setprecision(0) << aircraft.along_nm
+            << ", \"near_planned_altitude\": "
+            << (aircraft.near_planned_altitude ? "true" : "false") << "}";
+    }
     out << "], \"sources\": "
         << sources_json(status.evaluated_at, status.weather_epoch, status.hazards_epoch,
-                        status.taf_epoch, status.wind_epoch)
+                        status.taf_epoch, status.wind_epoch, status.traffic_epoch)
         << "}";
     return out.str();
 }
@@ -576,13 +712,14 @@ std::optional<Response> replay_briefing(const Request& request, const AirportTab
                                         const std::string& history_root) {
     const bool asked = param(request, "weather_at") || param(request, "hazards_at") ||
                        param(request, "taf_at") || param(request, "wind_at") ||
-                       param(request, "evaluated_at");
+                       param(request, "traffic_at") || param(request, "evaluated_at");
     if (!asked) return std::nullopt;
 
     WeatherSnapshot weather;
     HazardSnapshot hazards;
     TafSnapshot tafs;
     WindSnapshot winds;
+    TrafficSnapshot traffic;
     Response error;
     bool failed = false;
     std::int64_t newest = 0;
@@ -595,6 +732,9 @@ std::optional<Response> replay_briefing(const Request& request, const AirportTab
                                              &parse_taf_snapshot, tafs, newest, error, failed);
     const WindSnapshot* wd = load_replay_feed(request, "wind_at", "wind", history_root,
                                               &parse_wind_snapshot, winds, newest, error, failed);
+    const TrafficSnapshot* tr =
+        load_replay_feed(request, "traffic_at", "traffic", history_root, &parse_traffic_snapshot,
+                         traffic, newest, error, failed);
     if (failed) return error;
 
     std::int64_t now = newest;
@@ -609,7 +749,7 @@ std::optional<Response> replay_briefing(const Request& request, const AirportTab
     } else if (now == 0) {
         now = static_cast<std::int64_t>(std::time(nullptr));
     }
-    return briefing_endpoint(request, airports, wx, now, hz, tf, wd);
+    return briefing_endpoint(request, airports, wx, now, hz, tf, wd, tr);
 }
 
 Response airports_endpoint(const AirportTable& airports, const WeatherSnapshot* weather) {
@@ -665,7 +805,7 @@ Response hazards_endpoint(const HazardSnapshot* hazards, std::int64_t now_epoch)
 }
 
 Response health_endpoint(WeatherStore* weather, std::int64_t now_epoch, HazardStore* hazards,
-                         TafStore* tafs, WindStore* winds) {
+                         TafStore* tafs, WindStore* winds, TrafficStore* traffic) {
     bool healthy = true;
 
     std::ostringstream weather_json;
@@ -748,11 +888,32 @@ Response health_endpoint(WeatherStore* weather, std::int64_t now_epoch, HazardSt
                     << json_escape(winds->last_error()) << "\"}";
     }
 
+    std::ostringstream traffic_health;
+    if (!traffic) {
+        traffic_health << "\"not configured\"";
+    } else {
+        const auto snapshot = traffic->current();
+        const bool fresh = snapshot && snapshot->generated_epoch > 0 &&
+                           std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) <=
+                               kStaleTrafficSeconds;
+        healthy = healthy && fresh;
+        traffic_health << "{\"aircraft\": " << (snapshot ? snapshot->aircraft.size() : 0)
+                       << ", \"snapshot_age_sec\": ";
+        if (snapshot) {
+            traffic_health << std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch);
+        } else {
+            traffic_health << "null";
+        }
+        traffic_health << ", \"reloads\": " << traffic->reloads() << ", \"reload_failures\": "
+                       << traffic->reload_failures() << ", \"last_error\": \""
+                       << json_escape(traffic->last_error()) << "\"}";
+    }
+
     Response response;
     response.body = std::string("{\"status\": \"") + (healthy ? "ok" : "degraded") +
                     "\", \"weather\": " + weather_json.str() + ", \"hazards\": " +
                     hazard_json.str() + ", \"taf\": " + taf_json.str() + ", \"wind\": " +
-                    wind_health.str() + "}\n";
+                    wind_health.str() + ", \"traffic\": " + traffic_health.str() + "}\n";
     return response;
 }
 
@@ -823,6 +984,23 @@ std::string wind_metrics_text(WindStore& store, std::int64_t now_epoch) {
         << "corridor_wind_snapshot_reloads_total " << store.reloads() << "\n"
         << "# TYPE corridor_wind_snapshot_reload_failures_total counter\n"
         << "corridor_wind_snapshot_reload_failures_total " << store.reload_failures() << "\n";
+    return out.str();
+}
+
+std::string traffic_metrics_text(TrafficStore& store, std::int64_t now_epoch) {
+    const auto snapshot = store.current();
+    std::ostringstream out;
+    out << "# TYPE corridor_traffic_aircraft gauge\n"
+        << "corridor_traffic_aircraft " << (snapshot ? snapshot->aircraft.size() : 0) << "\n";
+    if (snapshot) {
+        out << "# TYPE corridor_traffic_snapshot_age_seconds gauge\n"
+            << "corridor_traffic_snapshot_age_seconds "
+            << std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) << "\n";
+    }
+    out << "# TYPE corridor_traffic_snapshot_reloads_total counter\n"
+        << "corridor_traffic_snapshot_reloads_total " << store.reloads() << "\n"
+        << "# TYPE corridor_traffic_snapshot_reload_failures_total counter\n"
+        << "corridor_traffic_snapshot_reload_failures_total " << store.reload_failures() << "\n";
     return out.str();
 }
 

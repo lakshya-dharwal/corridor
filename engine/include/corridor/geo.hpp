@@ -19,6 +19,13 @@ LatLon intermediate_point(LatLon a, LatLon b, double fraction);
 // Shortest distance from p to the great-circle segment a-b.
 double distance_to_segment_nm(LatLon p, LatLon a, LatLon b);
 
+// Closest point of p on the route. along_nm is distance from the first waypoint.
+struct RouteProjection {
+    double along_nm = 0.0;
+    double cross_nm = 0.0;
+};
+RouteProjection project_onto_route(LatLon p, const std::vector<LatLon>& waypoints);
+
 // Total length of a route through the waypoints.
 double route_length_nm(const std::vector<LatLon>& waypoints);
 

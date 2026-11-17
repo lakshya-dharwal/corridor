@@ -12,6 +12,7 @@
 #include "corridor/hazards.hpp"
 #include "corridor/http.hpp"
 #include "corridor/taf.hpp"
+#include "corridor/traffic.hpp"
 #include "corridor/weather.hpp"
 #include "corridor/wind.hpp"
 
@@ -42,7 +43,8 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
                            std::int64_t now_epoch = 0,
                            const HazardSnapshot* hazards = nullptr,
                            const TafSnapshot* tafs = nullptr,
-                           const WindSnapshot* winds = nullptr);
+                           const WindSnapshot* winds = nullptr,
+                           const TrafficSnapshot* traffic = nullptr);
 
 // Replay from archived generations. Returns nullopt when the request does not
 // name one, so the caller keeps using the live snapshots. A named feed is read
@@ -64,7 +66,7 @@ Response hazards_endpoint(const HazardSnapshot* hazards = nullptr, std::int64_t 
 // service still answers briefings in that state.
 Response health_endpoint(WeatherStore* weather = nullptr, std::int64_t now_epoch = 0,
                          HazardStore* hazards = nullptr, TafStore* tafs = nullptr,
-                         WindStore* winds = nullptr);
+                         WindStore* winds = nullptr, TrafficStore* traffic = nullptr);
 
 // ---------- Route status, used for alerts ----------
 
@@ -73,6 +75,16 @@ struct RouteHazard {
     std::string label;  // e.g. "G-AIRMET ICE"
     std::optional<double> low_ft, high_ft, enter_min, exit_min;
     std::optional<bool> at_altitude;
+};
+
+// One aircraft inside the corridor. Only filled when traffic_feed is "ok",
+// so a partial or stale picture cannot raise enter and leave alerts.
+struct RouteTraffic {
+    std::string icao;
+    std::string callsign;
+    std::optional<double> alt_ft;
+    double along_nm = 0.0;
+    bool near_planned_altitude = false;
 };
 
 // The parts of a briefing a pilot wants to be told about when they change.
@@ -91,6 +103,11 @@ struct RouteStatus {
     double min_spo2 = 1.0;
     std::string hazard_feed = "not configured";  // "ok", "stale" or "not configured"
     std::vector<RouteHazard> hazards;
+    // "ok" when the snapshot is fresh and the route sits inside the searched
+    // rectangle. "partial" when the fetch did not cover the route. "stale"
+    // when the file is too old to treat as current. Alerts use only "ok".
+    std::string traffic_feed = "not configured";
+    std::vector<RouteTraffic> traffic;
     // Generations this status was computed from. Zero means that feed was not
     // used. A newer epoch with the same picture is not a change.
     std::int64_t evaluated_at = 0;
@@ -98,6 +115,7 @@ struct RouteStatus {
     std::int64_t hazards_epoch = 0;
     std::int64_t taf_epoch = 0;
     std::int64_t wind_epoch = 0;
+    std::int64_t traffic_epoch = 0;
 };
 
 // Status for the route described by the same query parameters as /briefing.
@@ -109,7 +127,8 @@ std::optional<RouteStatus> route_status(const Request& request, const AirportTab
                                         const HazardSnapshot* hazards = nullptr,
                                         Response* error = nullptr,
                                         const TafSnapshot* tafs = nullptr,
-                                        const WindSnapshot* winds = nullptr);
+                                        const WindSnapshot* winds = nullptr,
+                                        const TrafficSnapshot* traffic = nullptr);
 
 // One plain-English line per change worth alerting on; empty if nothing changed.
 std::vector<std::string> diff_route_status(const RouteStatus& before, const RouteStatus& after);
@@ -124,5 +143,6 @@ std::string weather_metrics_text(WeatherStore& store, std::int64_t now_epoch);
 std::string hazard_metrics_text(HazardStore& store, std::int64_t now_epoch);
 std::string taf_metrics_text(TafStore& store, std::int64_t now_epoch);
 std::string wind_metrics_text(WindStore& store, std::int64_t now_epoch);
+std::string traffic_metrics_text(TrafficStore& store, std::int64_t now_epoch);
 
 }  // namespace corridor

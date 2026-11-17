@@ -27,13 +27,14 @@ Educational project. Not medical advice and not for operational flight planning.
 | Demo page: map, hazard areas, altitude and SpO2 chart, live alerts | Built; checked in a desktop browser with live data, not on a phone |
 | Snapshot history and briefing replay | Built, tested; the same epochs and clock return the same briefing |
 | Engine tests on every push | GitHub Actions workflow `engine` |
+| Trust score | Built. SpO2 gap vs Cottrell 1995 and Muhm 2007, plus the median wind shift on 20 routes |
 | Linux web service: container, TLS proxy, request ids | Built. `deploy/docker-compose.yml` starts the C++ server and the proxy |
-| ADS-B traffic ingestion | Not started |
+| ADS-B traffic inside the corridor, at briefing time | Built, tested |
 | Load test and a public deploy | Not started |
 
 ## Demo
 
-One command builds the server if needed, starts the weather, hazard, forecast, and wind workers, and serves the page:
+One command builds the server if needed, starts the weather, hazard, forecast, wind, and traffic workers, and serves the page:
 
 ```bash
 tools/run_demo.sh 8080
@@ -41,7 +42,8 @@ tools/run_demo.sh 8080
 
 Then open http://127.0.0.1:8080/. It loads a flight from Phoenix to New Century
 AirCenter in Olathe, Kansas, with current weather at both ends, the hazard areas the
-route crosses, the estimated blood-oxygen curve, and a live alert feed. Pick any other
+route crosses, the equipped aircraft inside the corridor at that moment, the estimated
+blood-oxygen curve, and a live alert feed. Pick any other
 pair of airports to re-brief. The map needs internet access (Leaflet and OpenStreetMap
 tiles); everything else is served by the C++ service.
 
@@ -179,6 +181,25 @@ the arrival forecast is read at an earlier hour, and the time spent at altitude
 changes the oxygen finding. A headwind does the opposite. With no fresh wind, the
 typed airspeed is the groundspeed.
 
+## Traffic in the corridor
+
+`traffic_worker.py` asks the OpenSky Network for ADS-B positions inside a rectangle
+that covers the demo airports (`run/traffic.tsv`, `CORRIDOR_TRAFFIC_SNAPSHOT`).
+Multilateration, FLARM, aircraft on the ground, and positions already older than a
+minute are dropped. A failed fetch leaves the previous file in place, so an outage
+never looks like an empty sky.
+
+A briefing lists the aircraft within 25 nm of the route and says whether each one is
+within 3,000 ft of the altitude the plan uses at that point. That is where they are
+now. It is not who will be there on arrival, and aircraft that are not broadcasting
+are absent. The rectangle is in the snapshot header. A route that leaves it is
+`partial`: the aircraft that were seen are still listed, and an empty result is not
+reported as an empty sky. A file older than 8 minutes is `stale`. It is still shown,
+and it stops driving alerts until a fresh snapshot arrives.
+
+Alerts, while the picture is fresh and the route is covered, say when an aircraft
+enters or leaves the corridor. They do not claim a conflict later in the flight.
+
 ## Replaying a briefing
 
 Each publish keeps the file it wrote, under `run/history/<feed>/<epoch>.tsv`
@@ -189,7 +210,7 @@ does not affect a live briefing. The newest 48 generations of each feed are kept
 A briefing names the generations it used:
 
 ```json
-"sources": {"evaluated_at": 1700000000, "weather": 1700000000, "hazards": null, "taf": null, "wind": null}
+"sources": {"evaluated_at": 1700000000, "weather": 1700000000, "hazards": null, "taf": null, "wind": null, "traffic": null}
 ```
 
 Asking for those generations again returns the same inputs:
@@ -256,10 +277,16 @@ Known limits: it ignores the left shift of the dissociation curve from respirato
 alkalosis, so it reads a few points low at altitude (conservative). It models a healthy,
 unacclimatized adult at rest. The fatigue score is a heuristic, not a validated model.
 
+A briefing carries a trust score. The SpO2 gap is the model's miss against two published
+measurements: Cottrell 1995 (preflight mean 97.0%) and Muhm 2007 (a 4.4 point drop from
+650 ft to 8,000 ft in 502 unacclimatized adults). The wind term is the median change in
+the 91.211 oxygen call across 20 fixed routes, flown at 140 kt and again with the
+forecast wind. A stale feed takes 30 points off. The same snapshots replay the same score.
+
 ## Layout
 
 - `engine/` C++20 library, CLI, and tests
-- `ingest/` Python feed workers
+- `ingest/` Python feed workers, including `traffic_worker.py`
 - `tools/ws_listen.py` WebSocket client for watching alerts
 - `tools/run_demo.sh` one-command demo launcher
 - `web/index.html` the demo page

@@ -14,9 +14,11 @@ add_library(corridor_engine
     src/taf.cpp
     src/wind.cpp
     src/hazards.cpp
+    src/traffic.cpp
     src/websocket.cpp
     src/alerts.cpp
     src/saved_routes.cpp
+    src/trust.cpp
     src/api.cpp)
 target_include_directories(corridor_engine PUBLIC include)
 target_compile_options(corridor_engine PRIVATE -Wall -Wextra -Wpedantic)
