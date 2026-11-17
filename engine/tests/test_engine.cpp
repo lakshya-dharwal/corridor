@@ -270,6 +270,16 @@ static void test_http_parsing() {
     CHECK(!parse_request_line("GET x HTTP/1.1\r\n\r\n", request));     // no leading slash
     CHECK(!parse_request_line("GET /x SPDY/3\r\n\r\n", request));
     CHECK(!parse_request_line("", request));
+
+    const std::string supplied = "abc-123.req";
+    CHECK(request_id_for(&supplied) == supplied);
+    const std::string broken = "abc\n123";
+    const std::string minted = request_id_for(&broken);
+    CHECK(minted != broken);
+    CHECK(minted.find('\n') == std::string::npos);
+    const std::string empty;
+    CHECK(!request_id_for(&empty).empty());
+    CHECK(!request_id_for(nullptr).empty());
 }
 
 static void test_api() {

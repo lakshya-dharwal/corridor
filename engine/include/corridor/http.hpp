@@ -40,6 +40,10 @@ std::map<std::string, std::string> parse_headers(std::string_view head);
 // True if the request asks to upgrade the connection to WebSocket.
 bool wants_websocket(const Request& request);
 
+// The caller's X-Request-Id when it is a short token. Otherwise a new id.
+// A space or a newline in the header is rejected so it cannot break the log line.
+std::string request_id_for(const std::string* header);
+
 class HttpServer {
 public:
     using Handler = std::function<Response(const Request&)>;

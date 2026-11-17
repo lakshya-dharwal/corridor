@@ -1,0 +1,10 @@
+.git
+.github
+run
+engine/build
+.venv
+**/*.tsv
+*.tmp
+__pycache__
+.claude
+.DS_Store

@@ -27,8 +27,9 @@ Educational project. Not medical advice and not for operational flight planning.
 | Demo page: map, hazard areas, altitude and SpO2 chart, live alerts | Built; checked in a desktop browser with live data, not on a phone |
 | Snapshot history and briefing replay | Built, tested; the same epochs and clock return the same briefing |
 | Engine tests on every push | GitHub Actions workflow `engine` |
+| Linux web service: container, TLS proxy, request ids | Built. `deploy/docker-compose.yml` starts the C++ server and the proxy |
 | ADS-B traffic ingestion | Not started |
-| Load test and a production deploy | Not started |
+| Load test and a public deploy | Not started |
 
 ## Demo
 
@@ -43,6 +44,18 @@ AirCenter in Olathe, Kansas, with current weather at both ends, the hazard areas
 route crosses, the estimated blood-oxygen curve, and a live alert feed. Pick any other
 pair of airports to re-brief. The map needs internet access (Leaflet and OpenStreetMap
 tiles); everything else is served by the C++ service.
+
+## Linux web service
+
+The same binary runs behind a proxy. The proxy terminates TLS and serves the page. The C++ process speaks plain HTTP on the Docker network and is not published to the host. `/health` is the container healthcheck: a stale feed still answers, with `"status": "degraded"`, and the check fails only when the process stops answering. Every request is one log line, `request id=… method=… path=… status=…`. The proxy sends its request id, and the server logs that same id.
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+curl -k https://127.0.0.1:8443/health
+curl -k "https://127.0.0.1:8443/briefing?from=KPHX&to=KIXD&alt=13500&gs=140"
+```
+
+Open https://127.0.0.1:8443/. The certificate is for localhost, so the browser warns. Snapshot files mounted from `run/` are optional. This compose file does not start Postgres or Redis.
 
 ## Run it
 

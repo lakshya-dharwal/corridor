@@ -1,0 +1,36 @@
+# The web service only. Postgres and Redis are not on this network.
+# Snapshots, when the host has them, are files mounted in.
+
+name: corridor-web
+
+services:
+  corridor:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      CORRIDOR_HOST: 0.0.0.0
+      CORRIDOR_WEATHER_SNAPSHOT: /snapshots/weather.tsv
+      CORRIDOR_HAZARD_SNAPSHOT: /snapshots/hazards.tsv
+      CORRIDOR_TAF_SNAPSHOT: /snapshots/taf.tsv
+      CORRIDOR_WIND_SNAPSHOT: /snapshots/wind.tsv
+      CORRIDOR_HISTORY: /snapshots/history
+      CORRIDOR_SAVED_ROUTES: /var/lib/corridor/saved_routes.tsv
+    volumes:
+      - ../run:/snapshots:ro
+      - corridor_state:/var/lib/corridor
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: deploy/proxy.Dockerfile
+    depends_on:
+      corridor:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:443"
+    volumes:
+      - ../web:/usr/share/nginx/html:ro
+
+volumes:
+  corridor_state:

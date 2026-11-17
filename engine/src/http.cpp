@@ -7,8 +7,10 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <exception>
 #include <sstream>
@@ -25,6 +27,22 @@ constexpr int kSendFlags = MSG_NOSIGNAL;  // Linux: no SIGPIPE on a closed peer
 #else
 constexpr int kSendFlags = 0;             // macOS uses SO_NOSIGPIPE instead
 #endif
+
+bool log_field(const std::string& text) {
+    if (text.empty() || text.size() > 256) return false;
+    for (unsigned char c : text) {
+        if (c <= 32 || c >= 127) return false;
+    }
+    return true;
+}
+
+void log_request(const std::string& id, const std::string& method, const std::string& path,
+                 int status, double seconds) {
+    const auto milliseconds = static_cast<long long>(seconds * 1000.0);
+    std::fprintf(stderr, "request id=%s method=%s path=%s status=%d duration_ms=%lld\n", id.c_str(),
+                 log_field(method) ? method.c_str() : "-", log_field(path) ? path.c_str() : "-",
+                 status, milliseconds);
+}
 
 const char* reason_phrase(int status) {
     switch (status) {
@@ -148,6 +166,23 @@ std::map<std::string, std::string> parse_headers(std::string_view head) {
     return headers;
 }
 
+std::string request_id_for(const std::string* header) {
+    auto acceptable = [](const std::string& text) {
+        if (text.empty() || text.size() > 64) return false;
+        for (unsigned char c : text) {
+            if (!(std::isalnum(c) || c == '-' || c == '_' || c == '.')) return false;
+        }
+        return true;
+    };
+    if (header && acceptable(*header)) return *header;
+    static std::atomic<std::uint64_t> sequence{0};
+    const auto ticks = static_cast<std::uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    std::ostringstream out;
+    out << std::hex << ticks << "-" << sequence.fetch_add(1);
+    return out.str();
+}
+
 bool wants_websocket(const Request& request) {
     const auto it = request.headers.find("upgrade");
     if (it == request.headers.end()) return false;
@@ -226,13 +261,18 @@ void HttpServer::handle_connection(int fd) {
         return;
     }
     Request request;
+    std::string id;
     if (!complete) {
         response = head.size() >= kMaxHeadBytes ? error_response(431, "request too large")
                                                 : error_response(408, "request timed out");
+        id = request_id_for(nullptr);
     } else if (!parse_request_line(head, request)) {
         response = error_response(400, "malformed request line");
+        id = request_id_for(nullptr);
     } else {
         request.headers = parse_headers(head);
+        const auto supplied = request.headers.find("x-request-id");
+        id = request_id_for(supplied == request.headers.end() ? nullptr : &supplied->second);
         const auto upgrade = upgrades_.find(request.path);
         if (upgrade == upgrades_.end()) {
             response = dispatch(request);
@@ -251,6 +291,7 @@ void HttpServer::handle_connection(int fd) {
                 const std::chrono::duration<double> elapsed =
                     std::chrono::steady_clock::now() - started;
                 record(101, elapsed.count());
+                log_request(id, request.method, request.path, 101, elapsed.count());
                 return;
             }
             response = *refusal;
@@ -260,13 +301,15 @@ void HttpServer::handle_connection(int fd) {
     std::string wire = "HTTP/1.1 " + std::to_string(response.status) + " " +
                        reason_phrase(response.status) + "\r\nContent-Type: " +
                        response.content_type + "\r\nContent-Length: " +
-                       std::to_string(response.body.size()) + "\r\nConnection: close\r\n\r\n";
+                       std::to_string(response.body.size()) + "\r\nX-Request-Id: " + id +
+                       "\r\nConnection: close\r\n\r\n";
     wire += response.body;
     send_all(fd, wire);
     ::close(fd);
 
     const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - started;
     record(response.status, elapsed.count());
+    log_request(id, request.method, request.path, response.status, elapsed.count());
 }
 
 void HttpServer::worker_loop() {
