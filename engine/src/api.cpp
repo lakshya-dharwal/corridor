@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
@@ -126,13 +127,24 @@ struct Evaluated {
     bool has_hazard_feed = false;
     std::int64_t hazard_feed_age = 0;
     std::size_t active_areas = 0;
+    bool has_taf = false;
+    bool taf_fresh = false;
+    std::int64_t taf_age = 0;
+    std::optional<ArrivalForecast> arrival;
+    bool has_wind = false;
+    bool wind_fresh = false;
+    bool wind_applied = false;
+    std::int64_t wind_age = 0;
+    double airspeed_kt = 0.0;
+    std::optional<RouteWind> wind;
 };
 
 // Throws ParamError for a bad request and std::invalid_argument for a plan the
 // engine rejects.
 Evaluated evaluate(const Request& request, const AirportTable& airports,
                    const WeatherSnapshot* weather, std::int64_t now_epoch,
-                   const HazardSnapshot* hazards) {
+                   const HazardSnapshot* hazards, const TafSnapshot* tafs,
+                   const WindSnapshot* winds) {
     Evaluated result;
     FlightPlan& plan = result.plan;
     plan.departure = airport_param(request, "from", airports, weather);
@@ -173,8 +185,72 @@ Evaluated evaluate(const Request& request, const AirportTable& airports,
         result.active_areas = active.size();
     }
 
+    result.airspeed_kt = plan.groundspeed_kt;
+    if (winds) {
+        result.has_wind = true;
+        result.wind_age = std::max<std::int64_t>(0, now_epoch - winds->generated_epoch);
+        result.wind_fresh = winds->generated_epoch > 0 && result.wind_age <= kStaleWindSeconds;
+        result.wind = route_wind(*winds, {plan.departure.pos, plan.destination.pos},
+                                 plan.cruise_alt_ft, now_epoch, plan.groundspeed_kt);
+        if (result.wind_fresh && result.wind) {
+            plan.groundspeed_kt = result.wind->groundspeed_kt;
+            result.wind_applied = true;
+        }
+    }
+
     result.briefing = build_briefing(plan, active);
+    if (tafs) {
+        result.has_taf = true;
+        result.taf_age = std::max<std::int64_t>(0, now_epoch - tafs->generated_epoch);
+        result.taf_fresh = tafs->generated_epoch > 0 && result.taf_age <= kStaleTafSeconds;
+        const std::int64_t eta =
+            now_epoch + std::llround(result.briefing.duration_min * 60.0);
+        result.arrival = forecast_at(*tafs, plan.destination.icao, eta, result.briefing.duration_min);
+    }
     return result;
+}
+
+std::string arrival_json(const Evaluated& e) {
+    std::ostringstream out;
+    out << std::fixed << "{\"status\": \"" << (e.taf_fresh ? "ok" : "stale") << "\", \"age_min\": "
+        << e.taf_age / 60 << ", \"station\": \"" << json_escape(e.plan.destination.icao)
+        << "\", \"eta_min\": " << std::setprecision(0) << e.briefing.duration_min;
+    if (!e.arrival) {
+        out << ", \"flight_category\": null}";
+        return out.str();
+    }
+    const ArrivalForecast& arrival = *e.arrival;
+    out << ", \"flight_category\": \"" << json_escape(arrival.flight_category)
+        << "\", \"ceiling_ft\": " << optional_json(arrival.ceiling_ft, 0)
+        << ", \"visibility_sm\": " << optional_json(arrival.visibility_sm, 1)
+        << ", \"wind_dir_deg\": " << optional_json(arrival.wind_dir_deg, 0)
+        << ", \"wind_speed_kt\": " << optional_json(arrival.wind_speed_kt, 0)
+        << ", \"wind_gust_kt\": " << optional_json(arrival.wind_gust_kt, 0)
+        << ", \"change\": \"" << json_escape(arrival.change) << "\", \"tempo_category\": "
+        << (arrival.tempo_category.empty() ? "null" : "\"" + json_escape(arrival.tempo_category) + "\"")
+        << ", \"tempo_change\": "
+        << (arrival.tempo_change.empty() ? "null" : "\"" + json_escape(arrival.tempo_change) + "\"")
+        << ", \"tempo_gust_kt\": " << optional_json(arrival.tempo_gust_kt, 0) << ", \"raw\": \""
+        << json_escape(arrival.raw_text) << "\"}";
+    return out.str();
+}
+
+std::string wind_json(const Evaluated& e) {
+    const char* status = "none";
+    if (!e.wind_fresh) status = "stale";
+    else if (e.wind_applied) status = "ok";
+    std::ostringstream out;
+    out << std::fixed << "{\"status\": \"" << status << "\", \"age_min\": " << e.wind_age / 60
+        << ", \"airspeed_kt\": " << std::setprecision(0) << e.airspeed_kt
+        << ", \"altitude_ft\": " << e.plan.cruise_alt_ft << ", \"tailwind_kt\": ";
+    if (e.wind_applied && e.wind) {
+        out << std::setprecision(1) << e.wind->tailwind_kt << ", \"groundspeed_kt\": "
+            << e.wind->groundspeed_kt;
+    } else {
+        out << "null, \"groundspeed_kt\": null";
+    }
+    out << "}";
+    return out.str();
 }
 
 const char* hazard_feed_status(const Evaluated& e) {
@@ -212,6 +288,48 @@ void diff_category(const std::string& airport, const std::string& before,
     }
 }
 
+void diff_arrival(const std::string& airport, const std::string& before, const std::string& after,
+                  std::vector<std::string>& changes) {
+    if (before == after) return;
+    if (after.empty()) {
+        changes.push_back(airport + " arrival forecast is no longer current");
+    } else if (before.empty()) {
+        changes.push_back(airport + " arrival forecast is current again: " + after);
+    } else {
+        changes.push_back(airport + " at arrival changed from " + before + " to " + after);
+    }
+}
+
+void diff_tempo(const std::string& airport, const std::string& before, const std::string& after,
+                std::vector<std::string>& changes) {
+    if (before == after) return;
+    if (after.empty()) {
+        changes.push_back(airport + " arrival tempo cleared");
+    } else if (before.empty()) {
+        changes.push_back(airport + " at arrival now includes " + after);
+    } else {
+        changes.push_back(airport + " arrival tempo changed from " + before + " to " + after);
+    }
+}
+
+std::string wind_phrase(int knots) {
+    if (knots >= 0) return std::to_string(knots) + " kt tailwind";
+    return std::to_string(-knots) + " kt headwind";
+}
+
+void diff_wind(const std::optional<int>& before, const std::optional<int>& after,
+               std::vector<std::string>& changes) {
+    if (before == after) return;
+    if (!before) {
+        changes.push_back("Wind along the route is " + wind_phrase(*after));
+    } else if (!after) {
+        changes.push_back("Wind along the route is no longer available");
+    } else if (std::abs(*after - *before) >= 8) {
+        changes.push_back("Wind along the route changed from " + wind_phrase(*before) + " to " +
+                          wind_phrase(*after));
+    }
+}
+
 }  // namespace
 
 Response error_json(int status, const std::string& message) {
@@ -234,9 +352,10 @@ const AirportTable& demo_airports() {
 
 Response briefing_endpoint(const Request& request, const AirportTable& airports,
                            const WeatherSnapshot* weather, std::int64_t now_epoch,
-                           const HazardSnapshot* hazards) {
+                           const HazardSnapshot* hazards, const TafSnapshot* tafs,
+                           const WindSnapshot* winds) {
     try {
-        const Evaluated e = evaluate(request, airports, weather, now_epoch, hazards);
+        const Evaluated e = evaluate(request, airports, weather, now_epoch, hazards, tafs, winds);
 
         std::vector<std::pair<std::string, std::string>> extra;
         if (weather) {
@@ -254,6 +373,8 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
                                    "\", \"age_min\": " + std::to_string(e.hazard_feed_age / 60) +
                                    ", \"active_areas\": " + std::to_string(e.active_areas) + "}");
         }
+        if (e.has_taf) extra.emplace_back("arrival", arrival_json(e));
+        if (e.has_wind) extra.emplace_back("wind", wind_json(e));
 
         Response response;
         response.body = to_json(e.briefing, e.plan, e.step, extra);
@@ -267,9 +388,11 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
 
 std::optional<RouteStatus> route_status(const Request& request, const AirportTable& airports,
                                         const WeatherSnapshot* weather, std::int64_t now_epoch,
-                                        const HazardSnapshot* hazards, Response* error) {
+                                        const HazardSnapshot* hazards, Response* error,
+                                        const TafSnapshot* tafs, const WindSnapshot* winds) {
     try {
-        const Evaluated e = evaluate(request, airports, weather, now_epoch, hazards);
+        const Evaluated e =
+            evaluate(request, airports, weather, now_epoch, hazards, tafs, winds);
 
         RouteStatus status;
         status.departure = e.plan.departure.icao;
@@ -279,6 +402,15 @@ std::optional<RouteStatus> route_status(const Request& request, const AirportTab
         }
         if (e.destination_weather && is_fresh(*e.destination_weather, now_epoch)) {
             status.destination_category = e.destination_weather->flight_category;
+        }
+        if (e.taf_fresh && e.arrival) {
+            status.arrival_category = e.arrival->flight_category;
+            if (!e.arrival->tempo_category.empty()) {
+                status.arrival_tempo = e.arrival->tempo_change + " " + e.arrival->tempo_category;
+            }
+        }
+        if (e.wind_applied && e.wind) {
+            status.tailwind_kt = static_cast<int>(std::lround(e.wind->tailwind_kt));
         }
         status.crew_oxygen_required = e.briefing.oxygen.crew_oxygen_required;
         status.passenger_oxygen_required = e.briefing.oxygen.passenger_oxygen_required;
@@ -303,6 +435,9 @@ std::vector<std::string> diff_route_status(const RouteStatus& before, const Rout
     diff_category(after.departure, before.departure_category, after.departure_category, changes);
     diff_category(after.destination, before.destination_category, after.destination_category,
                   changes);
+    diff_arrival(after.destination, before.arrival_category, after.arrival_category, changes);
+    diff_tempo(after.destination, before.arrival_tempo, after.arrival_tempo, changes);
+    diff_wind(before.tailwind_kt, after.tailwind_kt, changes);
 
     if (before.crew_oxygen_required != after.crew_oxygen_required) {
         changes.push_back(after.crew_oxygen_required
@@ -348,7 +483,11 @@ std::string route_status_json(const RouteStatus& status) {
     out << "{\"from\": \"" << json_escape(status.departure) << "\", \"to\": \""
         << json_escape(status.destination) << "\", \"departure_category\": "
         << category(status.departure_category) << ", \"destination_category\": "
-        << category(status.destination_category) << ", \"crew_oxygen_required\": "
+        << category(status.destination_category) << ", \"arrival_category\": "
+        << category(status.arrival_category) << ", \"arrival_tempo\": "
+        << category(status.arrival_tempo) << ", \"tailwind_kt\": "
+        << (status.tailwind_kt ? std::to_string(*status.tailwind_kt) : "null")
+        << ", \"crew_oxygen_required\": "
         << (status.crew_oxygen_required ? "true" : "false")
         << ", \"passenger_oxygen_required\": "
         << (status.passenger_oxygen_required ? "true" : "false") << ", \"min_spo2_pct\": "
@@ -418,7 +557,8 @@ Response hazards_endpoint(const HazardSnapshot* hazards, std::int64_t now_epoch)
     return response;
 }
 
-Response health_endpoint(WeatherStore* weather, std::int64_t now_epoch, HazardStore* hazards) {
+Response health_endpoint(WeatherStore* weather, std::int64_t now_epoch, HazardStore* hazards,
+                         TafStore* tafs, WindStore* winds) {
     bool healthy = true;
 
     std::ostringstream weather_json;
@@ -459,10 +599,53 @@ Response health_endpoint(WeatherStore* weather, std::int64_t now_epoch, HazardSt
                     << json_escape(hazards->last_error()) << "\"}";
     }
 
+    std::ostringstream taf_json;
+    if (!tafs) {
+        taf_json << "\"not configured\"";
+    } else {
+        const auto snapshot = tafs->current();
+        const bool fresh = snapshot && snapshot->generated_epoch > 0 &&
+                           std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) <=
+                               kStaleTafSeconds;
+        healthy = healthy && fresh;
+        taf_json << "{\"stations\": " << (snapshot ? snapshot->stations.size() : 0)
+                 << ", \"snapshot_age_min\": ";
+        if (snapshot) {
+            taf_json << std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) / 60;
+        } else {
+            taf_json << "null";
+        }
+        taf_json << ", \"reloads\": " << tafs->reloads() << ", \"reload_failures\": "
+                 << tafs->reload_failures() << ", \"last_error\": \""
+                 << json_escape(tafs->last_error()) << "\"}";
+    }
+
+    std::ostringstream wind_health;
+    if (!winds) {
+        wind_health << "\"not configured\"";
+    } else {
+        const auto snapshot = winds->current();
+        const bool fresh = snapshot && snapshot->generated_epoch > 0 &&
+                           std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) <=
+                               kStaleWindSeconds;
+        healthy = healthy && fresh;
+        wind_health << "{\"reports\": " << (snapshot ? snapshot->reports.size() : 0)
+                    << ", \"snapshot_age_min\": ";
+        if (snapshot) {
+            wind_health << std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) / 60;
+        } else {
+            wind_health << "null";
+        }
+        wind_health << ", \"reloads\": " << winds->reloads() << ", \"reload_failures\": "
+                    << winds->reload_failures() << ", \"last_error\": \""
+                    << json_escape(winds->last_error()) << "\"}";
+    }
+
     Response response;
     response.body = std::string("{\"status\": \"") + (healthy ? "ok" : "degraded") +
                     "\", \"weather\": " + weather_json.str() + ", \"hazards\": " +
-                    hazard_json.str() + "}\n";
+                    hazard_json.str() + ", \"taf\": " + taf_json.str() + ", \"wind\": " +
+                    wind_health.str() + "}\n";
     return response;
 }
 
@@ -499,6 +682,40 @@ std::string hazard_metrics_text(HazardStore& store, std::int64_t now_epoch) {
         << "corridor_hazard_snapshot_reloads_total " << store.reloads() << "\n"
         << "# TYPE corridor_hazard_snapshot_reload_failures_total counter\n"
         << "corridor_hazard_snapshot_reload_failures_total " << store.reload_failures() << "\n";
+    return out.str();
+}
+
+std::string taf_metrics_text(TafStore& store, std::int64_t now_epoch) {
+    const auto snapshot = store.current();
+    std::ostringstream out;
+    out << "# TYPE corridor_taf_stations gauge\n"
+        << "corridor_taf_stations " << (snapshot ? snapshot->stations.size() : 0) << "\n";
+    if (snapshot) {
+        out << "# TYPE corridor_taf_snapshot_age_seconds gauge\n"
+            << "corridor_taf_snapshot_age_seconds "
+            << std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) << "\n";
+    }
+    out << "# TYPE corridor_taf_snapshot_reloads_total counter\n"
+        << "corridor_taf_snapshot_reloads_total " << store.reloads() << "\n"
+        << "# TYPE corridor_taf_snapshot_reload_failures_total counter\n"
+        << "corridor_taf_snapshot_reload_failures_total " << store.reload_failures() << "\n";
+    return out.str();
+}
+
+std::string wind_metrics_text(WindStore& store, std::int64_t now_epoch) {
+    const auto snapshot = store.current();
+    std::ostringstream out;
+    out << "# TYPE corridor_wind_reports gauge\n"
+        << "corridor_wind_reports " << (snapshot ? snapshot->reports.size() : 0) << "\n";
+    if (snapshot) {
+        out << "# TYPE corridor_wind_snapshot_age_seconds gauge\n"
+            << "corridor_wind_snapshot_age_seconds "
+            << std::max<std::int64_t>(0, now_epoch - snapshot->generated_epoch) << "\n";
+    }
+    out << "# TYPE corridor_wind_snapshot_reloads_total counter\n"
+        << "corridor_wind_snapshot_reloads_total " << store.reloads() << "\n"
+        << "# TYPE corridor_wind_snapshot_reload_failures_total counter\n"
+        << "corridor_wind_snapshot_reload_failures_total " << store.reload_failures() << "\n";
     return out.str();
 }
 

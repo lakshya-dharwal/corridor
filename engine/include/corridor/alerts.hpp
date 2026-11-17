@@ -18,6 +18,7 @@
 
 #include "corridor/api.hpp"
 #include "corridor/http.hpp"
+#include "corridor/saved_routes.hpp"
 
 namespace corridor {
 
@@ -29,7 +30,10 @@ public:
     // A number that changes whenever the underlying data does.
     using VersionFn = std::function<std::uint64_t()>;
 
-    AlertHub(StatusFn status, VersionFn version, std::size_t max_connections = 256);
+    // `saved` remembers each route's last status. Null keeps the old behaviour:
+    // a connection only hears about changes that happen while it is open.
+    AlertHub(StatusFn status, VersionFn version, std::size_t max_connections = 256,
+             SavedRoutes* saved = nullptr);
     ~AlertHub();
 
     void start();
@@ -64,6 +68,7 @@ private:
     const StatusFn status_;
     const VersionFn version_;
     const std::size_t max_connections_;
+    SavedRoutes* saved_;
 
     std::mutex pending_mutex_;
     std::vector<Connection> pending_;

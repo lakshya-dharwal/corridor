@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Starts the whole demo: both feed workers and the server, then serves the page.
+# Starts the whole demo: the feed workers and the server, then serves the page.
 #
 #   tools/run_demo.sh [port]        then open http://127.0.0.1:<port>/
 #
@@ -22,13 +22,16 @@ fi
 
 "$PY" ingest/metar_worker.py --ids "$STATIONS" --snapshot run/weather.tsv --loop 300 &
 "$PY" ingest/hazard_worker.py --snapshot run/hazards.tsv --loop 300 &
+"$PY" ingest/taf_worker.py --ids "$STATIONS" --snapshot run/taf.tsv --loop 300 &
+"$PY" ingest/wind_worker.py --snapshot run/wind.tsv --loop 300 &
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
 # Give the first fetch a moment so the page opens with live data already loaded.
-for _ in $(seq 1 30); do
-    [ -s run/weather.tsv ] && [ -s run/hazards.tsv ] && break
+for _ in $(seq 1 40); do
+    [ -s run/weather.tsv ] && [ -s run/hazards.tsv ] && [ -s run/taf.tsv ] && [ -s run/wind.tsv ] && break
     sleep 0.5
 done
 
 echo "demo page: http://127.0.0.1:${PORT}/" >&2
-CORRIDOR_WEB_ROOT=web engine/build/corridor_server "$PORT" run/weather.tsv run/hazards.tsv
+CORRIDOR_TAF_SNAPSHOT=run/taf.tsv CORRIDOR_WIND_SNAPSHOT=run/wind.tsv CORRIDOR_WEB_ROOT=web \
+    engine/build/corridor_server "$PORT" run/weather.tsv run/hazards.tsv

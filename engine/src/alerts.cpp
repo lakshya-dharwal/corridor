@@ -39,9 +39,10 @@ bool send_all(int fd, const std::string& data) {
 }
 
 std::string message_json(const char* type, const RouteStatus& status,
-                         const std::vector<std::string>& changes) {
+                         const std::vector<std::string>& changes, bool resumed) {
     std::ostringstream out;
     out << "{\"type\": \"" << type << "\", \"at\": " << static_cast<std::int64_t>(std::time(nullptr));
+    if (resumed) out << ", \"resumed\": true";
     if (!changes.empty()) {
         out << ", \"changes\": [";
         for (std::size_t i = 0; i < changes.size(); ++i) {
@@ -55,9 +56,10 @@ std::string message_json(const char* type, const RouteStatus& status,
 
 }  // namespace
 
-AlertHub::AlertHub(StatusFn status, VersionFn version, std::size_t max_connections)
+AlertHub::AlertHub(StatusFn status, VersionFn version, std::size_t max_connections,
+                   SavedRoutes* saved)
     : status_(std::move(status)), version_(std::move(version)),
-      max_connections_(max_connections) {}
+      max_connections_(max_connections), saved_(saved) {}
 
 AlertHub::~AlertHub() { stop(); }
 
@@ -113,13 +115,26 @@ void AlertHub::adopt_pending() {
         timeout.tv_sec = 2;
         ::setsockopt(connection.fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
+        std::vector<std::string> missed;
+        bool resumed = false;
+        std::string key;
+        if (saved_) {
+            key = route_key(connection.request);
+            if (const std::optional<RouteStatus> previous = saved_->find(key)) {
+                resumed = true;
+                missed = diff_route_status(*previous, connection.last);
+            }
+        }
+        const char* type = missed.empty() ? "status" : "alert";
         const std::string hello =
             connection.handshake +
-            encode_ws_frame(WsOpcode::Text, message_json("status", connection.last, {}));
+            encode_ws_frame(WsOpcode::Text, message_json(type, connection.last, missed, resumed));
         if (!send_all(connection.fd, hello)) {
             ::close(connection.fd);
             continue;
         }
+        if (saved_) saved_->remember(key, connection.last);
+        if (!missed.empty()) alerts_sent_.fetch_add(1);
         connection.handshake.clear();
         connections_.push_back(std::move(connection));
     }
@@ -180,9 +195,10 @@ void AlertHub::reevaluate_all() {
         const std::vector<std::string> changes = diff_route_status(connection.last, *status);
         connection.last = *status;
         if (changes.empty()) continue;
-        if (send_all(connection.fd,
-                     encode_ws_frame(WsOpcode::Text, message_json("alert", *status, changes)))) {
+        if (send_all(connection.fd, encode_ws_frame(WsOpcode::Text,
+                                                    message_json("alert", *status, changes, false)))) {
             alerts_sent_.fetch_add(1);
+            if (saved_) saved_->remember(route_key(connection.request), connection.last);
         } else {
             drop(i);
         }

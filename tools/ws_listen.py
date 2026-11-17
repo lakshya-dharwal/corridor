@@ -117,8 +117,15 @@ def main() -> None:
                         print(f"ALERT   {change}", flush=True)
                 else:
                     status = message["status"]
+                    arrival = status.get("arrival_category") or "none"
+                    tempo = f", tempo {status['arrival_tempo']}" if status.get("arrival_tempo") else ""
+                    wind = status.get("tailwind_kt")
+                    wind_text = ""
+                    if wind is not None:
+                        wind_text = f", {wind} kt tailwind" if wind >= 0 else f", {-wind} kt headwind"
                     print(f"STATUS  {status['from']} {status['departure_category']} -> "
                           f"{status['to']} {status['destination_category']}, "
+                          f"at arrival {arrival}{tempo}{wind_text}, "
                           f"{len(status['hazards'])} hazards on route, "
                           f"crew oxygen required: {status['crew_oxygen_required']}", flush=True)
         send_frame(sock, OP_CLOSE, struct.pack(">H", 1000))

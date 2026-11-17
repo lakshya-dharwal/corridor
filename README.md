@@ -21,7 +21,9 @@ Educational project. Not medical advice and not for operational flight planning.
 | Hazard areas: G-AIRMET ingestion, route intersection, entry/exit timing, altitude check | Built, tested, run end to end on live data; result matches PostGIS |
 | SIGMET parsing | Written from the documented fields; none was active to test against |
 | WebSocket route alerts (`/alerts`): RFC 6455 handshake and framing, per-route change detection | Built, tested, run live with two listeners |
-| Saved routes that persist across connections (`saved_routes` table) | Not started; a route is watched for as long as its connection is open |
+| Saved routes that persist across connections | Built; last status is kept in `run/saved_routes.tsv` and reported on the next connection |
+| Destination forecast at arrival (TAF) | Built; the group covering ETA is briefed, and a worse TEMPO or PROB is called out |
+| Cruise wind and the groundspeed it makes | Built; GFS wind at cruise becomes one tailwind, and the ETA moves with it |
 | Demo page: map, hazard areas, altitude and SpO2 chart, live alerts | Built; checked in a desktop browser with live data, not on a phone |
 | ADS-B traffic ingestion | Not started |
 | Monitoring, load test, deploy, map frontend | Not started |
@@ -137,6 +139,31 @@ clear skies.
 Cross-check on live data: for Denver to Seattle the engine found 7 areas, and an
 independent PostGIS query (`ST_DWithin` on the same route and distance) also found 7.
 
+## Forecast at arrival
+
+`taf_worker.py` pulls TAFs for the same stations and publishes one row per forecast
+group to `run/taf.tsv` (`CORRIDOR_TAF_SNAPSHOT`). A briefing takes the flight's duration,
+finds the prevailing group (base, FM, or BECMG) that covers the ETA, and reports that
+flight category as `arrival`. A TEMPO or PROB group in the same window is included only
+when its category is worse than the prevailing one. A missing group means the TAF does
+not reach the arrival; the current METAR is still shown as "now".
+
+The alert watch treats that category like a field changing: `KIXD at arrival changed
+from VFR to IFR`. A stale forecast file (older than 30 minutes) is still shown and
+flagged, and it stops driving alerts until a fresh snapshot arrives. A TAF outage does
+not touch the METAR snapshot.
+
+## Wind and groundspeed
+
+The speed in the request is airspeed. `wind_worker.py` publishes NOAA GFS winds, via
+Open-Meteo, on a grid of pressure levels (`run/wind.tsv`, `CORRIDOR_WIND_SNAPSHOT`).
+The FAA wind/temp tables that used to carry this were retired with the NAM model.
+The engine interpolates to cruise altitude, averages the along-track component over
+the route, and flies the resulting groundspeed. A tailwind shortens the flight, so
+the arrival forecast is read at an earlier hour, and the time spent at altitude
+changes the oxygen finding. A headwind does the opposite. With no fresh wind, the
+typed airspeed is the groundspeed.
+
 ## Route alerts
 
 Open a WebSocket to `/alerts` with the same parameters as `/briefing` and the service
@@ -152,9 +179,11 @@ ALERT   KIXD flight category changed from VFR to IFR
 ALERT   Hazard no longer on route: G-AIRMET IFR
 ```
 
-Alerts fire on: a flight category change at either airport, a hazard area entering or
-leaving the route, the oxygen requirement changing, and weather or hazard data going
-stale or recovering. Each message also carries the full current status as JSON.
+Alerts fire on: a flight category change at either airport, the destination forecast
+at arrival changing, a worse TEMPO or PROB group appearing or clearing, the along-track
+wind changing by 8 kt or more, a hazard area entering or leaving the route, the oxygen
+requirement changing, and weather, forecast, wind, or hazard data going stale or
+recovering. Each message also carries the full current status as JSON.
 
 How it works:
 
@@ -164,6 +193,11 @@ How it works:
   serving requests, so idle listeners never use up the worker pool.
 - Routes are re-evaluated only when a snapshot reloads, plus once a minute to catch data
   going stale. Unchanged routes get no message.
+- Closing the connection does not forget the route. The last status is written to
+  `run/saved_routes.tsv` (`CORRIDOR_SAVED_ROUTES` overrides the path). The next connection
+  for the same flight gets `"resumed": true`, and an `alert` listing what changed while
+  nobody was listening. A missing journal only means that connection starts fresh. The
+  `saved_routes` table in Postgres is the same idea and is not written by the service.
 - A client that stops reading is dropped after a 2 second send timeout. The hub pings
   every 30 seconds, answers pings, and sends close code 1001 on shutdown.
 

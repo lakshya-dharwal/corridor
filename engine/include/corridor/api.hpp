@@ -11,7 +11,9 @@
 #include "corridor/briefing.hpp"
 #include "corridor/hazards.hpp"
 #include "corridor/http.hpp"
+#include "corridor/taf.hpp"
 #include "corridor/weather.hpp"
+#include "corridor/wind.hpp"
 
 namespace corridor {
 
@@ -38,7 +40,9 @@ const AirportTable& demo_airports();
 Response briefing_endpoint(const Request& request, const AirportTable& airports,
                            const WeatherSnapshot* weather = nullptr,
                            std::int64_t now_epoch = 0,
-                           const HazardSnapshot* hazards = nullptr);
+                           const HazardSnapshot* hazards = nullptr,
+                           const TafSnapshot* tafs = nullptr,
+                           const WindSnapshot* winds = nullptr);
 
 // GET /airports
 Response airports_endpoint(const AirportTable& airports,
@@ -50,7 +54,8 @@ Response hazards_endpoint(const HazardSnapshot* hazards = nullptr, std::int64_t 
 // GET /health. "degraded" when a configured feed is missing or stale; the
 // service still answers briefings in that state.
 Response health_endpoint(WeatherStore* weather = nullptr, std::int64_t now_epoch = 0,
-                         HazardStore* hazards = nullptr);
+                         HazardStore* hazards = nullptr, TafStore* tafs = nullptr,
+                         WindStore* winds = nullptr);
 
 // ---------- Route status, used for alerts ----------
 
@@ -66,6 +71,12 @@ struct RouteStatus {
     std::string departure, destination;
     // Flight category from a fresh METAR; empty when there is none.
     std::string departure_category, destination_category;
+    // Prevailing TAF category at ETA, and a worse temporary group ("TEMPO LIFR").
+    // Empty when the forecast feed is missing or stale.
+    std::string arrival_category, arrival_tempo;
+    // Along-track wind actually used. Positive is a tailwind. Empty when the
+    // briefing flew the typed airspeed.
+    std::optional<int> tailwind_kt;
     bool crew_oxygen_required = false;
     bool passenger_oxygen_required = false;
     double min_spo2 = 1.0;
@@ -80,7 +91,9 @@ std::optional<RouteStatus> route_status(const Request& request, const AirportTab
                                         const WeatherSnapshot* weather = nullptr,
                                         std::int64_t now_epoch = 0,
                                         const HazardSnapshot* hazards = nullptr,
-                                        Response* error = nullptr);
+                                        Response* error = nullptr,
+                                        const TafSnapshot* tafs = nullptr,
+                                        const WindSnapshot* winds = nullptr);
 
 // One plain-English line per change worth alerting on; empty if nothing changed.
 std::vector<std::string> diff_route_status(const RouteStatus& before, const RouteStatus& after);
@@ -93,5 +106,7 @@ Response error_json(int status, const std::string& message);
 // Feed gauges and counters in Prometheus text format.
 std::string weather_metrics_text(WeatherStore& store, std::int64_t now_epoch);
 std::string hazard_metrics_text(HazardStore& store, std::int64_t now_epoch);
+std::string taf_metrics_text(TafStore& store, std::int64_t now_epoch);
+std::string wind_metrics_text(WindStore& store, std::int64_t now_epoch);
 
 }  // namespace corridor

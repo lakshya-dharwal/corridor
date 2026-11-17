@@ -6,6 +6,8 @@
 //   CORRIDOR_HOST               bind address, default 127.0.0.1
 //   CORRIDOR_WEATHER_SNAPSHOT   snapshot file written by ingest/metar_worker.py
 //   CORRIDOR_HAZARD_SNAPSHOT    snapshot file written by ingest/hazard_worker.py
+//   CORRIDOR_TAF_SNAPSHOT       snapshot file written by ingest/taf_worker.py
+//   CORRIDOR_WIND_SNAPSHOT      snapshot file written by ingest/wind_worker.py
 //   CORRIDOR_WEB_ROOT           folder holding the demo page, default "web"
 //
 // Routes: /  (demo page)  /health  /airports  /briefing  /hazards  /metrics
@@ -23,8 +25,11 @@
 #include "corridor/api.hpp"
 #include "corridor/hazards.hpp"
 #include "corridor/http.hpp"
+#include "corridor/saved_routes.hpp"
+#include "corridor/taf.hpp"
 #include "corridor/weather.hpp"
 #include "corridor/websocket.hpp"
+#include "corridor/wind.hpp"
 
 using namespace corridor;
 
@@ -53,6 +58,9 @@ int main(int argc, char** argv) {
     const std::string weather_path = setting(argc, argv, 2, "CORRIDOR_WEATHER_SNAPSHOT", "");
     const std::string hazard_path = setting(argc, argv, 3, "CORRIDOR_HAZARD_SNAPSHOT", "");
     const std::string web_root = setting(0, nullptr, 1, "CORRIDOR_WEB_ROOT", "web");
+    const std::string taf_path = setting(0, nullptr, 1, "CORRIDOR_TAF_SNAPSHOT", "");
+    const std::string wind_path = setting(0, nullptr, 1, "CORRIDOR_WIND_SNAPSHOT", "");
+    const std::string saved_path = setting(0, nullptr, 1, "CORRIDOR_SAVED_ROUTES", "run/saved_routes.tsv");
     if (port <= 0 || port > 65535) {
         std::fprintf(stderr, "invalid port\n");
         return 2;
@@ -61,19 +69,29 @@ int main(int argc, char** argv) {
     const AirportTable& airports = demo_airports();
     std::unique_ptr<WeatherStore> weather_owner;
     std::unique_ptr<HazardStore> hazard_owner;
+    std::unique_ptr<TafStore> taf_owner;
+    std::unique_ptr<WindStore> wind_owner;
     if (!weather_path.empty()) weather_owner = std::make_unique<WeatherStore>(weather_path);
     if (!hazard_path.empty()) hazard_owner = std::make_unique<HazardStore>(hazard_path);
+    if (!taf_path.empty()) taf_owner = std::make_unique<TafStore>(taf_path);
+    if (!wind_path.empty()) wind_owner = std::make_unique<WindStore>(wind_path);
     WeatherStore* weather = weather_owner.get();
     HazardStore* hazards = hazard_owner.get();
+    TafStore* tafs = taf_owner.get();
+    WindStore* winds = wind_owner.get();
 
     // Holding the shared_ptrs keeps one consistent snapshot alive for a whole
     // evaluation even if a reload swaps in a newer one meanwhile.
     auto status_of = [&](const Request& request, Response* error) {
         const auto wx = weather ? weather->current() : nullptr;
         const auto hz = hazards ? hazards->current() : nullptr;
-        return route_status(request, airports, wx.get(), now_epoch(), hz.get(), error);
+        const auto tf = tafs ? tafs->current() : nullptr;
+        const auto wd = winds ? winds->current() : nullptr;
+        return route_status(request, airports, wx.get(), now_epoch(), hz.get(), error, tf.get(),
+                            wd.get());
     };
 
+    SavedRoutes saved_routes(saved_path);
     AlertHub hub(
         [&](const Request& request) { return status_of(request, nullptr); },
         [&]() -> std::uint64_t {
@@ -81,12 +99,16 @@ int main(int argc, char** argv) {
             // as the reload check when no HTTP requests are arriving.
             if (weather) weather->current();
             if (hazards) hazards->current();
-            return (weather ? weather->reloads() : 0) + (hazards ? hazards->reloads() : 0);
-        });
+            if (tafs) tafs->current();
+            if (winds) winds->current();
+            return (weather ? weather->reloads() : 0) + (hazards ? hazards->reloads() : 0) +
+                   (tafs ? tafs->reloads() : 0) + (winds ? winds->reloads() : 0);
+        },
+        256, &saved_routes);
 
     HttpServer server;
     server.get("/health", [&](const Request&) {
-        return health_endpoint(weather, now_epoch(), hazards);
+        return health_endpoint(weather, now_epoch(), hazards, tafs, winds);
     });
     server.get("/airports", [&](const Request&) {
         const auto wx = weather ? weather->current() : nullptr;
@@ -95,7 +117,10 @@ int main(int argc, char** argv) {
     server.get("/briefing", [&](const Request& request) {
         const auto wx = weather ? weather->current() : nullptr;
         const auto hz = hazards ? hazards->current() : nullptr;
-        return briefing_endpoint(request, airports, wx.get(), now_epoch(), hz.get());
+        const auto tf = tafs ? tafs->current() : nullptr;
+        const auto wd = winds ? winds->current() : nullptr;
+        return briefing_endpoint(request, airports, wx.get(), now_epoch(), hz.get(), tf.get(),
+                                 wd.get());
     });
     server.get("/hazards", [&](const Request&) {
         const auto hz = hazards ? hazards->current() : nullptr;
@@ -119,6 +144,8 @@ int main(int argc, char** argv) {
         response.body = server.metrics_text() + hub.metrics_text();
         if (weather) response.body += weather_metrics_text(*weather, now_epoch());
         if (hazards) response.body += hazard_metrics_text(*hazards, now_epoch());
+        if (tafs) response.body += taf_metrics_text(*tafs, now_epoch());
+        if (winds) response.body += wind_metrics_text(*winds, now_epoch());
         return response;
     });
     server.upgrade("/alerts", [&](const Request& request, int fd) -> std::optional<Response> {
@@ -142,9 +169,12 @@ int main(int argc, char** argv) {
     std::signal(SIGPIPE, SIG_IGN);
 
     hub.start();
-    std::fprintf(stderr, "corridor_server listening on %s:%d, weather: %s, hazards: %s\n",
+    std::fprintf(stderr,
+                 "corridor_server listening on %s:%d, weather: %s, hazards: %s, taf: %s, wind: %s, saved routes: %s\n",
                  host.c_str(), port, weather ? weather_path.c_str() : "not configured",
-                 hazards ? hazard_path.c_str() : "not configured");
+                 hazards ? hazard_path.c_str() : "not configured",
+                 tafs ? taf_path.c_str() : "not configured",
+                 winds ? wind_path.c_str() : "not configured", saved_path.c_str());
     // Browsers open spare connections and hold them idle, so leave headroom.
     const bool started = server.listen(host, static_cast<std::uint16_t>(port), 8);
     hub.stop();

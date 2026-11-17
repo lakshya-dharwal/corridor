@@ -3,157 +3,948 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Corridor flight briefing</title>
+<title>Corridor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@500;600&family=Inter:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
   :root {
-    --bg: #f4f5f7; --panel: #ffffff; --ink: #18202b; --muted: #5d6877; --line: #dde1e7;
-    --accent: #0b5cad; --good: #1d7f4e; --warn: #b26a00; --bad: #b3261e;
-    --vfr: #1d7f4e; --mvfr: #1c5fc4; --ifr: #c0281f; --lifr: #a0239a;
-    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --bg: #05060a;
+    --ink: #f4f1ea;
+    --body: #c9c4ba;
+    --muted: #9a958c;
+    --dim: #1a1b20;
+    --line: rgba(244, 241, 234, 0.14);
+    --line-strong: rgba(244, 241, 234, 0.42);
+    --accent: #ff4a2a;
+    --pass: #3dba7a;
+    --caution: #e2b340;
+    --fail: #ff4a2a;
+    --display: "Instrument Sans", "Avenir Next", "Segoe UI", sans-serif;
+    --sans: Inter, "Avenir Next", "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink);
-         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 20px;
-           background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  header h1 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
-  header p { margin: 0; color: var(--muted); }
-  #feeds { margin-left: auto; color: var(--muted); font-size: 13px; }
-  main { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
-  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-  section + section { margin-top: 12px; }
-  h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; text-transform: uppercase;
-       letter-spacing: 0.06em; color: var(--muted); }
-  form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
-  label.wide { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
-  select, input[type=number] { width: 100%; padding: 7px 8px; border: 1px solid var(--line);
-       border-radius: 6px; font: inherit; color: var(--ink); background: #fff; }
-  button { grid-column: 1 / -1; padding: 9px; border: 0; border-radius: 6px; background: var(--accent);
-           color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-  button:disabled { opacity: 0.6; cursor: default; }
-  #error { grid-column: 1 / -1; color: var(--bad); min-height: 1.2em; margin: 0; }
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .stat b { display: block; font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
-  .stat span { color: var(--muted); font-size: 12px; }
-  .bad { color: var(--bad); } .warn { color: var(--warn); } .good { color: var(--good); }
-  ul { margin: 0; padding: 0; list-style: none; }
-  li { padding: 7px 0; border-top: 1px solid var(--line); }
-  li:first-child { border-top: 0; padding-top: 0; }
-  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px;
-         font-weight: 650; color: #fff; vertical-align: 1px; }
-  .tag.vfr { background: var(--vfr); } .tag.mvfr { background: var(--mvfr); }
-  .tag.ifr { background: var(--ifr); } .tag.lifr { background: var(--lifr); }
-  .tag.hit { background: var(--bad); } .tag.miss { background: #8a93a0; } .tag.unknown { background: #a17a2c; }
-  .muted { color: var(--muted); } .small { font-size: 12px; }
-  .raw { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-word; margin-top: 3px; }
-  #map { height: 430px; border-radius: 8px; }
-  #chart { width: 100%; height: auto; display: block; }
-  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; color: var(--muted); font-size: 12px; }
-  .legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 5px; }
-  #alerts li { font-size: 13px; }
-  #alerts time { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-right: 6px; }
-  #alerts .alert { color: var(--bad); font-weight: 600; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #8a93a0; margin-right: 6px; }
-  .dot.on { background: var(--good); }
-  footer { padding: 4px 20px 22px; color: var(--muted); font-size: 12px; }
+  html { scroll-snap-type: y proximity; background: var(--bg); }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.5;
+    font-weight: 400;
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-snap-type: none; } }
+
+  .glow {
+    position: fixed;
+    z-index: 0;
+    right: -18vw;
+    top: -24vw;
+    width: 52vw;
+    height: 52vw;
+    background: radial-gradient(circle, rgba(255, 74, 42, 0.20) 0%, rgba(255, 74, 42, 0.06) 32%, transparent 68%);
+    pointer-events: none;
+  }
+  .marks { position: fixed; inset: 16px; z-index: 6; pointer-events: none; }
+  .marks i { position: absolute; width: 16px; height: 16px; border: 1px solid var(--line-strong); }
+  .marks i:nth-child(1) { top: 0; left: 0; border-right: 0; border-bottom: 0; }
+  .marks i:nth-child(2) { top: 0; right: 0; border-left: 0; border-bottom: 0; }
+  .marks i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
+  .marks i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
+
+  .chrome, .ruler-y, .strip { z-index: 5; }
+  .chrome {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 28px 40px 0 92px;
+    pointer-events: none;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .chrome b { color: var(--ink); font-weight: 500; letter-spacing: 0.14em; margin-right: 12px; }
+
+  .ruler-y {
+    position: fixed; left: 30px; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 11px;
+  }
+  .ruler-y button {
+    width: 14px; height: 1px; padding: 8px 0; margin: 0;
+    border: 0; border-radius: 0; background: transparent; cursor: pointer;
+    display: grid; align-items: center;
+  }
+  .ruler-y button::before {
+    content: ""; height: 1px; width: 10px; background: rgba(244, 241, 234, 0.32);
+  }
+  .ruler-y button.on::before { width: 22px; background: var(--accent); }
+
+  main { position: relative; z-index: 1; }
+  .scene {
+    min-height: 100vh;
+    scroll-snap-align: start;
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+    align-items: center;
+    gap: 56px;
+    padding: 104px 7vw 136px 96px;
+  }
+  .kicker {
+    margin: 0 0 18px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  h1, .giant {
+    margin: 0;
+    font-family: var(--display);
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  h1 { font-size: clamp(4rem, 6.2vw, 5.75rem); max-width: 10ch; text-wrap: balance; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .giant { font-size: clamp(4.5rem, 8vw, 7rem); letter-spacing: -0.045em; line-height: 0.92; white-space: nowrap; }
+  .giant.accent, .accent { color: var(--accent); }
+  .giant small, .unit {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    color: var(--muted);
+    margin-left: 12px;
+    vertical-align: 18px;
+  }
+  .lede { margin: 22px 0 0; max-width: 34rem; color: var(--body); font-size: 18px; line-height: 1.45; }
+  .fine {
+    margin: 18px 0 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 36rem;
+  }
+  .pass { color: var(--pass); }
+  .caution { color: var(--caution); }
+  .fail { color: var(--fail); }
+
+  .hero {
+    grid-template-areas: "copy object" "controls object";
+    align-items: center;
+  }
+  .hero .copy { grid-area: copy; align-self: end; }
+  .hero .frame { grid-area: object; }
+  .hero .controls { grid-area: controls; align-self: start; }
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin-top: 28px; max-width: 460px; }
+  label { display: grid; gap: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  label.wide { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; text-transform: uppercase; }
+  select, input[type="number"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.04em;
+    text-transform: none;
+  }
+  select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, #9a958c 50%), linear-gradient(135deg, #9a958c 50%, transparent 50%);
+    background-position: calc(100% - 16px) 55%, calc(100% - 11px) 55%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 28px;
+  }
+  select:focus, input:focus, button:focus-visible, .ruler-y button:focus-visible {
+    outline: 1px solid var(--ink);
+    outline-offset: 3px;
+  }
+  input[type="checkbox"] { accent-color: var(--ink); width: 14px; height: 14px; }
+  button[type="submit"] {
+    grid-column: 1 / -1;
+    padding: 12px 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  button[type="submit"]:hover { border-color: var(--ink); }
+  button[type="submit"]:disabled { opacity: 0.45; cursor: default; }
+  #error { grid-column: 1 / -1; min-height: 1.2em; margin: 0; font-family: var(--mono); font-size: 12px; letter-spacing: 0.03em; color: var(--fail); }
+
+  .frame {
+    width: min(460px, 100%);
+    justify-self: end;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 20px 20px 18px;
+  }
+  .frame-head, .split-labels {
+    display: flex; justify-content: space-between; gap: 12px;
+    margin-bottom: 16px;
+  }
+  .dots { display: grid; width: 100%; gap: 6px; }
+  .dots i {
+    display: block;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--dim);
+  }
+  .dots i.on { background: rgba(244, 241, 234, var(--o, 1)); }
+  .dots i.on.blood { background: rgba(255, 74, 42, var(--o, 1)); }
+  .dots i.edge { box-shadow: inset 0 0 0 1px rgba(244, 241, 234, 0.92); }
+  .dots.line { height: 120px; align-items: center; width: min(100%, calc(var(--cols) * 46px)); }
+  .dots.line i { transform: scale(var(--s, 0.7)); }
+
+  .ticks { display: flex; align-items: flex-start; gap: 0; height: 34px; margin-top: 14px; }
+  .ticks b {
+    flex: 1; height: 6px; border-left: 1px solid rgba(244, 241, 234, 0.28);
+    font-family: var(--mono); font-size: 10px; font-weight: 400; letter-spacing: 0.08em;
+    color: var(--muted); position: relative;
+  }
+  .ticks b.major { height: 12px; border-left-color: rgba(244, 241, 234, 0.55); }
+  .ticks b span { position: absolute; top: 14px; left: 0; transform: translateX(-40%); white-space: nowrap; }
+
+  .rule-row { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .findings { margin: 22px 0 0; padding: 0; list-style: none; max-width: 36rem; }
+  .findings li { padding: 10px 0; border-top: 1px solid var(--line); color: var(--body); }
+  .findings li:first-child { border-top: 0; }
+
+  .stations { display: grid; gap: 28px; width: min(520px, 100%); justify-self: end; }
+  .station { padding-top: 18px; border-top: 1px solid var(--line); }
+  .station:first-child { border-top: 0; padding-top: 0; }
+  .station-top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+  .station-top .code { font-family: var(--display); font-weight: 600; font-size: clamp(2.4rem, 4vw, 3.4rem); letter-spacing: -0.04em; line-height: 1; }
+  .station-top .cat { font-family: var(--display); font-weight: 600; font-size: clamp(2.4rem, 4vw, 3.4rem); letter-spacing: -0.04em; line-height: 1; }
+  .raw { margin: 8px 0 0; font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--muted); word-break: break-word; }
+
+  .hit-list { margin: 18px 0 0; padding: 0; list-style: none; max-width: 26rem; }
+  .hit-list li { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .hit-list li:first-child { border-top: 0; }
+  .hit-list span { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--muted); white-space: nowrap; }
+  .hit-list span.fail { color: var(--fail); }
+
+  #map { height: min(64vh, 620px); background: var(--bg); border-radius: 4px; }
+  .leaflet-container { background: var(--bg); font-family: var(--mono); }
+  .leaflet-tile-pane { filter: grayscale(1) brightness(0.22) contrast(1.5); }
+  .leaflet-bar { border: 1px solid var(--line) !important; border-radius: 4px !important; box-shadow: none !important; }
+  .leaflet-bar a, .leaflet-bar a:hover {
+    background: var(--bg); color: var(--ink); border-bottom-color: var(--line) !important;
+    width: 28px; height: 28px; line-height: 28px;
+  }
+  .leaflet-control-attribution {
+    background: transparent !important; color: var(--muted) !important;
+    font-family: var(--mono); font-size: 10px !important;
+  }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+  .leaflet-tooltip, .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px;
+    box-shadow: none; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  }
+  .leaflet-popup-content-wrapper { border-radius: 6px; }
+  .leaflet-popup-content { margin: 10px 12px; }
+  .leaflet-tooltip { padding: 4px 7px; }
+  .leaflet-tooltip-top:before { border-top-color: var(--line); }
+
+  .strip {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    padding: 10px 40px 14px 92px;
+  }
+  .scrub { display: flex; align-items: flex-end; height: 16px; margin-bottom: 8px; }
+  .scrub i { flex: 1; height: 6px; border-left: 1px solid rgba(244, 241, 234, 0.22); display: block; }
+  .scrub i.on { border-left-color: rgba(244, 241, 234, 0.7); height: 10px; }
+  .scrub i.now { border-left-color: var(--accent); height: 14px; }
+  .strip-row { display: grid; grid-template-columns: 1.5fr repeat(5, 1fr); gap: 12px; align-items: end; }
+  .strip .lbl { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+  .strip b, #liveAlert {
+    font-family: var(--mono); font-weight: 500; font-size: 13px; letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  #liveAlert {
+    display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #liveAlert.fail { color: var(--fail); }
+
+  @media (max-width: 900px) {
+    .ruler-y { display: none; }
+    .chrome { padding: 22px 22px 0; }
+    .scene { grid-template-columns: 1fr; gap: 32px; padding: 104px 22px 150px; align-items: start; }
+    .hero { grid-template-areas: "copy" "object" "controls"; }
+    h1, .giant { font-size: clamp(2.7rem, 12vw, 4rem); }
+    .frame, .stations { justify-self: stretch; }
+    h1 { max-width: none; }
+    .strip { padding: 10px 16px 14px; }
+    .strip-row { grid-template-columns: repeat(3, 1fr); row-gap: 8px; }
+    .marks { inset: 10px; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>Corridor</h1>
-  <p>Live route briefing with a pilot physiology layer</p>
-  <div id="feeds">Checking feeds...</div>
+<div class="glow" aria-hidden="true"></div>
+<div class="marks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<header class="chrome">
+  <div>Corridor</div>
+  <div><b id="sceneNum">01</b><span id="sceneName">Blood</span></div>
 </header>
+<nav class="ruler-y" id="rulerY" aria-label="Scenes"></nav>
 
 <main>
-  <div>
-    <section>
-      <h2>Flight plan</h2>
+  <section class="scene hero" data-scene="01" data-name="Blood">
+    <div class="copy">
+      <p class="kicker">Blood</p>
+      <h1>Your <em>blood</em> at altitude.</h1>
+      <p class="lede">One route. The oxygen it leaves you. The rule that follows.</p>
+    </div>
+    <div class="controls">
       <form id="plan">
         <label>From <select id="from"></select></label>
         <label>To <select id="to"></select></label>
-        <label>Cruise altitude (ft) <input id="alt" type="number" value="13500" min="0" max="60000" step="500"></label>
-        <label>Groundspeed (kt) <input id="gs" type="number" value="140" min="30" max="700" step="10"></label>
+        <label>Cruise ft <input id="alt" type="number" value="13500" min="0" max="60000" step="500"></label>
+        <label>Airspeed kt <input id="gs" type="number" value="140" min="30" max="700" step="10"></label>
         <label class="wide"><input id="pressurized" type="checkbox"> Pressurized cabin</label>
         <button id="go" type="submit">Brief this route</button>
         <p id="error" role="alert"></p>
       </form>
-    </section>
-
-    <section>
-      <h2>Pilot physiology</h2>
-      <div class="stats">
-        <div class="stat"><b id="minSpo2">-</b><span>lowest SpO2</span></div>
-        <div class="stat"><b id="below90">-</b><span>min below 90%</span></div>
-        <div class="stat"><b id="fatigue">-</b><span>fatigue score</span></div>
+      <p class="fine">Educational estimate for a healthy adult at rest. Not medical advice. Not for flight planning.</p>
+    </div>
+    <div class="frame">
+      <div class="frame-head">
+        <p class="kicker">SpO2 lattice</p>
+        <p class="kicker" id="heroLit">— lit</p>
       </div>
-      <ul id="oxygen" style="margin-top:12px"></ul>
-    </section>
+      <div class="dots" id="heroDots" aria-hidden="true"></div>
+    </div>
+  </section>
 
-    <section>
-      <h2>Airport weather</h2>
-      <ul id="weather"></ul>
-    </section>
-
-    <section>
-      <h2>Hazards on route</h2>
-      <ul id="hazards"></ul>
-    </section>
-
-    <section>
-      <h2><span id="wsDot" class="dot"></span>Live alerts</h2>
-      <ul id="alerts"></ul>
-    </section>
-  </div>
-
-  <div>
-    <section>
-      <h2 id="routeTitle">Route</h2>
-      <div id="map"></div>
-      <div class="legend">
-        <span><i style="background:#0b5cad"></i>Route</span>
-        <span><i style="background:#2b7bbb"></i>Icing</span>
-        <span><i style="background:#d9822b"></i>Turbulence</span>
-        <span><i style="background:#8e5bbf"></i>IFR / mountain obscuration</span>
-        <span><i style="background:#1f9d8a"></i>Wind</span>
-        <span><i style="background:#b9bfc8"></i>Hazard area not on this route</span>
+  <section class="scene" data-scene="02" data-name="Track">
+    <div>
+      <p class="kicker">Track</p>
+      <p class="giant" id="dist">—<small>NM</small></p>
+      <p class="lede" id="trackLede">The route, sampled onto a lattice. Near side solid. Far side faded.</p>
+    </div>
+    <div class="frame">
+      <div class="frame-head">
+        <p class="kicker">Great circle</p>
+        <p class="kicker" id="trackEnds">Near → far</p>
       </div>
-    </section>
-    <section>
-      <h2>Altitude and blood oxygen over the flight</h2>
-      <svg id="chart" viewBox="0 0 860 280" role="img" aria-label="Altitude and estimated SpO2 over the flight"></svg>
-      <div class="legend">
-        <span><i style="background:#9fb3c8;height:9px"></i>Altitude (ft)</span>
-        <span><i style="background:#b3261e"></i>Estimated SpO2</span>
-        <span><i style="background:#b3261e;height:1px;border-top:1px dashed #b3261e;background:none"></i>90% line</span>
-        <span><i style="background:#f1c27d;height:9px"></i>Inside a hazard at your altitude</span>
+      <div class="dots" id="trackDots" aria-hidden="true"></div>
+      <div class="ticks" id="trackTicks"></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="03" data-name="Altitude">
+    <div>
+      <p class="kicker">Altitude</p>
+      <p class="giant" id="cruise">—<small>FT</small></p>
+      <p class="lede" id="altLede">Cruise altitude. The mass is the climb. The outline is the top.</p>
+    </div>
+    <div class="frame">
+      <div class="frame-head">
+        <p class="kicker">Profile</p>
+        <p class="kicker" id="altMax">— ft</p>
       </div>
-    </section>
-  </div>
+      <div class="dots" id="altDots" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="04" data-name="Drop">
+    <div>
+      <p class="kicker">The drop</p>
+      <p class="giant accent" id="lowSpo2">—<small>%</small></p>
+      <p class="lede" id="dropLede">Lowest estimated saturation along the flight.</p>
+      <p class="fine" id="fatigueLine">Fatigue —</p>
+    </div>
+    <div class="frame">
+      <div class="frame-head">
+        <p class="kicker">Along the flight</p>
+        <p class="kicker">Accent under 90</p>
+      </div>
+      <div class="dots line" id="dropDots" aria-hidden="true"></div>
+      <div class="ticks" id="dropTicks"></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="05" data-name="Rule">
+    <div>
+      <p class="kicker">14 CFR 91.211</p>
+      <p class="giant" id="ruleWord">—</p>
+      <ul class="findings" id="findings"></ul>
+    </div>
+    <div class="frame">
+      <div class="split-labels">
+        <p class="kicker">Crew</p>
+        <p class="kicker">Passengers</p>
+      </div>
+      <div class="rule-row">
+        <div class="dots" id="crewDots" aria-hidden="true"></div>
+        <div class="dots" id="paxDots" aria-hidden="true"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="06" data-name="Fields">
+    <div>
+      <p class="kicker">Both ends</p>
+      <h1>The fields.</h1>
+      <p class="lede" id="altimeterLine">The forecast at the destination when you land.</p>
+    </div>
+    <div class="stations" id="stations"></div>
+  </section>
+
+  <section class="scene" data-scene="07" data-name="Reach">
+    <div>
+      <p class="kicker">Reach</p>
+      <p class="giant" id="reachN">—<small>HIT</small></p>
+      <p class="lede" id="reachLede">Hazard areas that contain the airplane, not just the route.</p>
+      <ul class="hit-list" id="hitList"></ul>
+    </div>
+    <div class="frame">
+      <div class="frame-head">
+        <p class="kicker">On the route</p>
+        <p class="kicker">Larger = at your altitude</p>
+      </div>
+      <div class="dots line" id="hitDots" aria-hidden="true"></div>
+    </div>
+  </section>
+
+  <section class="scene" data-scene="08" data-name="Corridor">
+    <div>
+      <p class="kicker">Corridor</p>
+      <h1>Where the <em>blood</em> is low.</h1>
+      <p class="lede">Accent is the stretch under 90. The outlines are hazard areas.</p>
+      <p class="fine">Weather and forecasts: aviationweather.gov. Winds: Open-Meteo, NOAA GFS. Tiles: OpenStreetMap.</p>
+    </div>
+    <div class="frame">
+      <div id="map" role="img" aria-label="Route and hazard areas"></div>
+    </div>
+  </section>
 </main>
 
-<footer>Educational estimate only. Not medical advice and not for operational flight planning.
-  Weather and hazard data: aviationweather.gov.</footer>
+<aside class="strip">
+  <div id="liveAlert" aria-live="polite">Quiet</div>
+  <div class="scrub" id="scrub" aria-hidden="true"></div>
+  <div class="strip-row">
+    <div><span class="lbl">Feed</span><b id="liveFeed">—</b></div>
+    <div><span class="lbl">Alt</span><b id="liveAlt">—</b></div>
+    <div><span class="lbl">SpO2</span><b id="liveSpo2">—</b></div>
+    <div><span class="lbl">Time</span><b id="liveT">—</b></div>
+    <div><span class="lbl">Hazard</span><b id="liveHaz">—</b></div>
+    <div><span class="lbl">Rule</span><b id="liveRule">—</b></div>
+  </div>
+</aside>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const SVG = "http://www.w3.org/2000/svg";
+const ACCENT = "#ff4a2a";
+const INK = "#f4f1ea";
 
-// Everything from the API goes into the page through textContent, never innerHTML:
-// METAR text and hazard names come from an outside feed.
 function el(tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined && text !== null) node.textContent = text;
   if (className) node.className = className;
   return node;
 }
-function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function clear(node) { node.replaceChildren(); }
+function hoursMinutes(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = String(Math.round(minutes % 60)).padStart(2, "0");
+  return h + " h " + m + " min";
+}
+function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
+function paintDots(host, columns, cells, row) {
+  host.style.gridTemplateColumns = "repeat(" + columns + ", 1fr)";
+  host.style.setProperty("--cols", columns);
+  clear(host);
+  for (const cell of cells) {
+    const dot = document.createElement("i");
+    if (cell.on) dot.classList.add("on");
+    if (cell.blood) dot.classList.add("blood");
+    if (cell.edge) dot.classList.add("edge");
+    if (cell.o != null) dot.style.setProperty("--o", String(cell.o));
+    if (cell.s != null) dot.style.setProperty("--s", String(cell.s));
+    host.appendChild(dot);
+  }
+  if (row) host.classList.add("line");
+}
+
+function emptyGrid(n, columns) {
+  return { columns, cells: Array.from({ length: n }, () => ({ on: false })) };
+}
+
+function spo2Grid(pct) {
+  const lit = pct == null ? 0 : clamp(Math.round(pct), 0, 100);
+  const on = Array(100).fill(false);
+  for (let n = 0; n < lit; n++) {
+    const rowFromBottom = Math.floor(n / 10);
+    const col = n % 10;
+    on[(9 - rowFromBottom) * 10 + col] = true;
+  }
+  const cells = on.map((isOn, i) => {
+    const row = Math.floor(i / 10);
+    const col = i % 10;
+    let edge = false;
+    if (isOn) {
+      for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+        const r = row + dr, c = col + dc;
+        if (r < 0 || c < 0 || r > 9 || c > 9 || !on[r * 10 + c]) edge = true;
+      }
+    }
+    const near = row / 9;
+    return { on: isOn, blood: isOn, edge, o: isOn ? (0.34 + 0.66 * near) : 1 };
+  });
+  return { columns: 10, cells, lit };
+}
+
+function sampleAt(profile, t) {
+  if (!profile.length) return null;
+  if (profile.length === 1) return profile[0];
+  return profile[Math.round(clamp(t, 0, 1) * (profile.length - 1))];
+}
+
+function trackGrid(profile) {
+  const n = 16;
+  const cells = Array.from({ length: n * n }, () => ({ on: false, o: 1, edge: false }));
+  if (profile.length < 2) return { columns: n, cells };
+  const lats = profile.map((p) => p.lat), lons = profile.map((p) => p.lon);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+  const latSpan = Math.max(0.4, maxLat - minLat);
+  const lonSpan = Math.max(0.4, maxLon - minLon);
+  const keys = [];
+  profile.forEach((p, i) => {
+    const col = clamp(Math.round(((p.lon - minLon) / lonSpan) * (n - 1)), 0, n - 1);
+    const row = clamp(Math.round((1 - (p.lat - minLat) / latSpan) * (n - 1)), 0, n - 1);
+    const key = row * n + col;
+    const t = i / (profile.length - 1);
+    const cell = cells[key];
+    if (!cell.on || t < cell.t) {
+      cell.on = true;
+      cell.t = t;
+      cell.o = 1 - t * 0.72;
+    }
+    keys.push(key);
+  });
+  for (let i = 0; i < cells.length; i++) {
+    if (!cells[i].on) continue;
+    const row = Math.floor(i / n), col = i % n;
+    for (const [dr, dc] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+      const r = row + dr, c = col + dc;
+      if (r < 0 || c < 0 || r >= n || c >= n || !cells[r * n + c].on) cells[i].edge = true;
+    }
+  }
+  return { columns: n, cells };
+}
+
+function altitudeGrid(profile) {
+  const cols = 24, rows = 12;
+  const cells = [];
+  const maxAlt = Math.max(1000, ...profile.map((p) => p.altitude_ft));
+  const crest = [];
+  for (let c = 0; c < cols; c++) {
+    const p = sampleAt(profile, c / (cols - 1));
+    crest.push(Math.round((p.altitude_ft / maxAlt) * (rows - 1)));
+  }
+  for (let r = 0; r < rows; r++) {
+    const fromBottom = rows - 1 - r;
+    for (let c = 0; c < cols; c++) {
+      const solid = c < cols * 0.42;
+      const on = solid ? fromBottom <= crest[c] : fromBottom === crest[c];
+      cells.push({
+        on,
+        edge: on && fromBottom === crest[c],
+        o: on ? 1 - (c / (cols - 1)) * 0.62 : 1,
+      });
+    }
+  }
+  return { columns: cols, cells, maxAlt };
+}
+
+function dropRow(profile) {
+  const cols = 12;
+  const cells = [];
+  for (let c = 0; c < cols; c++) {
+    const p = sampleAt(profile, cols === 1 ? 0 : c / (cols - 1));
+    const low = p.spo2_pct < 90;
+    const s = clamp(0.42 + 0.58 * ((p.spo2_pct - 78) / 20), 0.42, 1);
+    cells.push({ on: true, blood: low, o: 1, s });
+  }
+  return { columns: cols, cells };
+}
+
+function blockGrid(on, count) {
+  const columns = 8;
+  const rows = Math.ceil(count / columns);
+  const cells = Array.from({ length: count }, (_, i) => {
+    const row = Math.floor(i / columns);
+    const col = i % columns;
+    const edge = on && (row === 0 || row === rows - 1 || col === 0 || col === columns - 1);
+    const near = rows <= 1 ? 1 : row / (rows - 1);
+    return { on, blood: on, o: on ? 0.4 + 0.6 * near : 1, edge };
+  });
+  return { columns, cells };
+}
+
+function hitRow(hits) {
+  const list = hits.length ? hits : Array.from({ length: 8 }, () => null);
+  return {
+    columns: list.length,
+    cells: list.map((h) => ({
+      on: !!h,
+      o: !h ? 1 : h.at_your_altitude === true ? 1 : 0.34,
+      s: !h ? 0.45 : h.at_your_altitude === true ? 1 : 0.62,
+    })),
+  };
+}
+
+function paintTicks(host, labels) {
+  clear(host);
+  labels.forEach((label, i) => {
+    const tick = document.createElement("b");
+    if (i === 0 || i === labels.length - 1 || label) tick.className = "major";
+    if (label) tick.appendChild(el("span", label));
+    host.appendChild(tick);
+  });
+}
+
+const state = { briefing: null };
+let map = null, routeLayer = null, hazardLayer = null, socket = null;
+
+function paintHero(pct) {
+  const grid = spo2Grid(pct);
+  paintDots($("heroDots"), grid.columns, grid.cells);
+  $("heroLit").textContent = pct == null ? "— lit" : grid.lit + " lit";
+}
+
+function render(briefing) {
+  state.briefing = briefing;
+  const route = briefing.route;
+  const phys = briefing.physiology;
+  const profile = briefing.profile;
+
+  paintHero(phys.min_spo2_pct);
+  $("dist").firstChild.textContent = Math.round(route.distance_nm).toLocaleString();
+  const wind = briefing.wind;
+  let windText = " One line.";
+  if (wind && wind.status === "ok" && wind.tailwind_kt != null) {
+    const knots = Math.round(wind.tailwind_kt);
+    windText = " " + (knots >= 0 ? knots + " kt of tailwind." : (-knots) + " kt of headwind.");
+  } else if (wind && wind.status === "stale") {
+    windText = " Wind forecast is stale.";
+  }
+  $("trackLede").textContent = route.from + " to " + route.to + ", " + hoursMinutes(route.duration_min) + "." + windText;
+  const track = trackGrid(profile);
+  paintDots($("trackDots"), track.columns, track.cells);
+  $("trackEnds").textContent = route.from + " → " + route.to;
+  paintTicks($("trackTicks"), [route.from, "", "", route.to]);
+
+  $("cruise").firstChild.textContent = Math.round(route.cruise_alt_ft).toLocaleString();
+  $("altLede").textContent = route.pressurized
+    ? "Pressurized. The cabin stays below the airplane."
+    : "Unpressurized. The cabin is the airplane.";
+  const alt = altitudeGrid(profile);
+  paintDots($("altDots"), alt.columns, alt.cells);
+  $("altMax").textContent = Math.round(alt.maxAlt).toLocaleString() + " ft";
+
+  $("lowSpo2").firstChild.textContent = Math.round(phys.min_spo2_pct);
+  $("dropLede").textContent = Math.round(phys.minutes_below_90_pct) + " min under 90%.";
+  $("fatigueLine").textContent = "Fatigue " + Math.round(phys.fatigue_score) + " / 100";
+  const drop = dropRow(profile);
+  paintDots($("dropDots"), drop.columns, drop.cells, true);
+  const total = Math.round(route.duration_min);
+  paintTicks($("dropTicks"), ["0", "", "", "", total + " min"]);
+
+  const rules = briefing.oxygen_rules;
+  const required = rules.crew_oxygen_required || rules.passenger_oxygen_required;
+  const word = $("ruleWord");
+  word.textContent = required ? "Required" : "Clear";
+  word.className = "giant " + (required ? "fail" : "pass");
+  const findings = $("findings");
+  clear(findings);
+  if (!rules.findings.length) findings.appendChild(el("li", "No supplemental oxygen required under 14 CFR 91.211."));
+  for (const finding of rules.findings) findings.appendChild(el("li", finding));
+  const crew = blockGrid(rules.crew_oxygen_required, 16);
+  const pax = blockGrid(rules.passenger_oxygen_required, 16);
+  paintDots($("crewDots"), crew.columns, crew.cells);
+  paintDots($("paxDots"), pax.columns, pax.cells);
+
+  renderStations(briefing.weather, briefing.arrival);
+  renderHits(briefing);
+  drawMap(briefing, state.hazards);
+  onScroll();
+}
+
+function catClass(category) {
+  const name = (category || "").toLowerCase();
+  if (name === "vfr") return "pass";
+  if (name === "mvfr") return "caution";
+  if (name === "ifr" || name === "lifr") return "fail";
+  return "";
+}
+function renderStations(wx, arrival) {
+  const host = $("stations");
+  clear(host);
+  const line = $("altimeterLine");
+  clear(line);
+  line.className = "lede";
+  if (!wx) {
+    line.textContent = "No live weather feed.";
+    host.appendChild(el("p", "No live weather feed.", "lede"));
+    return;
+  }
+  const altimeter = "Altimeter " + wx.altimeter_inhg.toFixed(2) + " inHg, from " + wx.altimeter_source + ".";
+  if (arrival && arrival.flight_category) {
+    line.appendChild(document.createTextNode(arrival.station + " at arrival, " + hoursMinutes(arrival.eta_min) + " out: "));
+    line.appendChild(el("span", arrival.flight_category, catClass(arrival.flight_category)));
+    if (arrival.tempo_category) {
+      line.appendChild(document.createTextNode(". " + (arrival.tempo_change || "Tempo") + " "));
+      line.appendChild(el("span", arrival.tempo_category, catClass(arrival.tempo_category)));
+    }
+    line.appendChild(document.createTextNode(". " + altimeter));
+  } else if (arrival) {
+    const why = arrival.status === "stale" ? "The forecast feed is stale. " : "No forecast covers the arrival. ";
+    line.textContent = why + altimeter;
+  } else {
+    line.textContent = altimeter;
+  }
+  [wx.departure, wx.destination].forEach((station, index) => {
+    const card = el("div", undefined, "station");
+    const landing = index === 1 && arrival && arrival.flight_category ? arrival : null;
+    if (!station && !landing) {
+      card.appendChild(el("p", "No current observation.", "lede"));
+      host.appendChild(card);
+      return;
+    }
+    const top = el("div", undefined, "station-top");
+    const code = (landing && landing.station) || (station && station.station) || "";
+    const category = landing ? landing.flight_category : station.flight_category;
+    top.appendChild(el("div", code, "code"));
+    top.appendChild(el("div", category, "cat " + catClass(category)));
+    card.appendChild(top);
+    if (landing) {
+      let when = "At arrival · " + hoursMinutes(landing.eta_min);
+      if (landing.tempo_category) when += " · " + (landing.tempo_change || "Tempo") + " " + landing.tempo_category;
+      else if (landing.tempo_gust_kt != null) when += " · tempo gusts " + landing.tempo_gust_kt + " kt";
+      if (arrival.status === "stale") when += " · stale";
+      card.appendChild(el("p", when, "fine"));
+    }
+    if (station) {
+      const wind = station.wind_speed_kt === null ? "Wind unknown"
+        : "Wind " + (station.wind_dir_deg === null ? "VRB" : String(station.wind_dir_deg).padStart(3, "0") + "°")
+          + " / " + station.wind_speed_kt + " kt";
+      const ceiling = station.ceiling_ft === null ? "no ceiling" : "ceiling " + station.ceiling_ft.toLocaleString() + " ft";
+      const age = station.age_min + " min ago" + (station.stale ? " · stale" : "");
+      const now = (landing ? "Now " + station.flight_category + " · " : "") + wind + " · " + (station.visibility_sm ?? "?") + " sm · " + ceiling + " · " + age;
+      card.appendChild(el("p", now, "fine"));
+      card.appendChild(el("p", station.raw, "raw"));
+    }
+    if (landing && landing.raw) card.appendChild(el("p", landing.raw, "raw"));
+    host.appendChild(card);
+  });
+}
+
+function renderHits(briefing) {
+  const hits = [...briefing.hazards_on_route].sort((a, b) => (a.enter_min ?? 0) - (b.enter_min ?? 0));
+  const at = hits.filter((h) => h.at_your_altitude === true);
+  $("reachN").firstChild.textContent = String(at.length);
+  const feed = briefing.hazard_feed;
+  const active = feed ? feed.active_areas : null;
+  $("reachLede").textContent = hits.length + " on the route"
+    + (active == null ? "." : " · " + active + " active.")
+    + (feed && feed.status === "stale" ? " Hazard feed is stale." : "");
+  const row = hitRow(hits);
+  paintDots($("hitDots"), row.columns, row.cells, true);
+  const list = $("hitList");
+  clear(list);
+  const shown = hits.slice(0, 5);
+  for (const h of shown) {
+    const item = el("li");
+    item.appendChild(el("b", h.kind + " " + h.hazard));
+    const label = h.at_your_altitude === true ? "At altitude" : h.at_your_altitude === false ? "Clear of you" : "No band";
+    item.appendChild(el("span", label, h.at_your_altitude === true ? "fail" : ""));
+    list.appendChild(item);
+  }
+  if (hits.length > shown.length) list.appendChild(el("li", "+" + (hits.length - shown.length) + " more"));
+  if (!hits.length) list.appendChild(el("li", feed ? "None of the active areas touch this route." : "No hazard feed."));
+}
+
+function initMap() {
+  if (typeof L === "undefined") {
+    $("map").textContent = "Map tiles need a network. The briefing still stands.";
+    return;
+  }
+  map = L.map("map", { zoomSnap: 0.25, attributionControl: true, keyboard: false }).setView([38, -100], 4);
+  map.getContainer().removeAttribute("tabindex");
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 10,
+    attribution: "&copy; OpenStreetMap",
+  }).addTo(map);
+  hazardLayer = L.layerGroup().addTo(map);
+  routeLayer = L.layerGroup().addTo(map);
+}
+
+function drawMap(briefing, allHazards) {
+  if (!map || !allHazards) return;
+  const held = window.scrollY;
+  hazardLayer.clearLayers();
+  routeLayer.clearLayers();
+  const onRoute = new Map(briefing.hazards_on_route.map((h) => [h.id, h]));
+  for (const area of allHazards.areas) {
+    const hit = onRoute.get(area.id);
+    const atYou = hit && hit.at_your_altitude === true;
+    const shape = L.polygon(area.polygon, {
+      color: atYou ? INK : "rgba(244,241,234,0.35)",
+      weight: atYou ? 1.5 : 1,
+      fillColor: INK,
+      fillOpacity: atYou ? 0.18 : hit ? 0.05 : 0.02,
+    }).addTo(hazardLayer);
+    const popup = el("div");
+    popup.appendChild(el("b", area.kind + " " + area.hazard));
+    const band = (area.low_ft == null && area.high_ft == null) ? "No altitude band"
+      : ((area.low_ft == null || area.low_ft === 0) ? "Surface" : area.low_ft.toLocaleString() + " ft")
+        + " – " + (area.high_ft == null ? "unlimited" : area.high_ft.toLocaleString() + " ft");
+    popup.appendChild(el("div", band));
+    if (hit) popup.appendChild(el("div", atYou ? "At your altitude" : "On the route, not at your altitude"));
+    shape.bindPopup(popup);
+  }
+
+  const profile = briefing.profile;
+  let run = [];
+  let low = profile[0] && profile[0].spo2_pct < 90;
+  const flush = (next) => {
+    if (run.length > 1) {
+      L.polyline(run, { color: low ? ACCENT : INK, weight: low ? 3 : 2, opacity: 0.95 }).addTo(routeLayer);
+    }
+    run = next ? [next] : [];
+  };
+  for (const p of profile) {
+    const isLow = p.spo2_pct < 90;
+    const point = [p.lat, p.lon];
+    if (run.length && isLow !== low) {
+      run.push(point);
+      flush(point);
+      low = isLow;
+    } else {
+      run.push(point);
+    }
+  }
+  flush(null);
+  const ends = [[profile[0].lat, profile[0].lon, briefing.route.from], [profile[profile.length - 1].lat, profile[profile.length - 1].lon, briefing.route.to]];
+  const line = L.polyline(profile.map((p) => [p.lat, p.lon]), { opacity: 0, weight: 0 }).addTo(routeLayer);
+  for (const [lat, lon, name] of ends) {
+    L.circleMarker([lat, lon], { radius: 5, color: INK, weight: 2, fillColor: "#05060a", fillOpacity: 1 })
+      .bindTooltip(name, { permanent: true, direction: "top", offset: [0, -4] })
+      .addTo(routeLayer);
+  }
+  map.fitBounds(line.getBounds(), { padding: [36, 36] });
+  map.getContainer().removeAttribute("tabindex");
+  window.scrollTo(0, held);
+}
+
+function scrubPaint(t) {
+  const host = $("scrub");
+  const n = 48;
+  if (host.childElementCount !== n) {
+    clear(host);
+    for (let i = 0; i < n; i++) host.appendChild(document.createElement("i"));
+  }
+  const now = Math.round(t * (n - 1));
+  [...host.children].forEach((tick, i) => {
+    tick.className = i === now ? "now" : i < now ? "on" : "";
+  });
+}
+
+function onScroll() {
+  const scenes = [...document.querySelectorAll(".scene")];
+  const mid = scrollY + innerHeight * 0.45;
+  let current = scenes[0];
+  for (const scene of scenes) {
+    if (scene.offsetTop <= mid) current = scene;
+  }
+  $("sceneNum").textContent = current.dataset.scene;
+  $("sceneName").textContent = current.dataset.name;
+  [...$("rulerY").children].forEach((button, i) => button.classList.toggle("on", scenes[i] === current));
+
+  const max = document.documentElement.scrollHeight - innerHeight;
+  const t = max <= 0 ? 0 : clamp(scrollY / max, 0, 1);
+  scrubPaint(t);
+  const profile = state.briefing && state.briefing.profile;
+  if (!profile || !profile.length) return;
+  const p = sampleAt(profile, t);
+  $("liveAlt").textContent = Math.round(p.altitude_ft).toLocaleString();
+  const spo = $("liveSpo2");
+  spo.textContent = Math.round(p.spo2_pct) + "%";
+  spo.className = p.spo2_pct < 90 ? "accent" : "";
+  $("liveT").textContent = "T+" + String(Math.round(p.minute)).padStart(3, "0");
+  const inside = state.briefing.hazards_on_route.some((h) =>
+    h.at_your_altitude === true && h.enter_min != null && p.minute >= h.enter_min && p.minute <= h.exit_min);
+  const haz = $("liveHaz");
+  haz.textContent = inside ? "In" : "Clear";
+  haz.className = inside ? "fail" : "pass";
+  if (current.dataset.scene === "08" && map) map.invalidateSize();
+}
+
+let socketQuiet = true;
+function setAlert(text, hot) {
+  const node = $("liveAlert");
+  node.textContent = text;
+  node.className = hot ? "fail" : "";
+}
+function watchRoute(query) {
+  if (socket) { socket.onclose = null; socket.close(); }
+  socketQuiet = true;
+  setAlert("Opening the watch.", false);
+  const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+  socket = new WebSocket(scheme + location.host + "/alerts?" + query);
+  socket.onopen = () => setAlert("Watching this route.", false);
+  socket.onclose = () => setAlert("Alert connection closed.", false);
+  socket.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "alert") {
+      const text = (message.changes || []).join(" · ") || "Route picture changed.";
+      setAlert((message.resumed ? "While you were away: " : "") + text, true);
+      brief(false);
+    } else if (socketQuiet) {
+      socketQuiet = false;
+      const saved = message.resumed ? " This route is saved." : "";
+      setAlert("Watching " + message.status.from + " to " + message.status.to + "." + saved, false);
+    }
+  };
+}
+
+function planQuery() {
+  return new URLSearchParams({
+    from: $("from").value,
+    to: $("to").value,
+    alt: $("alt").value,
+    gs: $("gs").value,
+    pressurized: $("pressurized").checked ? "true" : "false",
+  }).toString();
+}
 async function getJSON(url) {
   const response = await fetch(url);
   const body = await response.json();
@@ -161,231 +952,22 @@ async function getJSON(url) {
   return body;
 }
 
-function hazardColor(type) {
-  if (type.startsWith("ICE")) return "#2b7bbb";
-  if (type.startsWith("TURB") || type === "CONVECTIVE") return "#d9822b";
-  if (type === "LLWS" || type === "SFC_WND") return "#1f9d8a";
-  return "#8e5bbf";
-}
-function band(low, high) {
-  if (low === null && high === null) return "no altitude band";
-  const lo = low === null || low === 0 ? "surface" : low.toLocaleString() + " ft";
-  return lo + " to " + (high === null ? "unlimited" : high.toLocaleString() + " ft");
-}
-function hoursMinutes(minutes) {
-  return Math.floor(minutes / 60) + " h " + String(Math.round(minutes % 60)).padStart(2, "0") + " min";
-}
-
-// ---------- Map ----------
-let map = null, routeLayer = null, hazardLayer = null;
-function initMap() {
-  if (typeof L === "undefined") {
-    $("map").textContent = "Map library could not be loaded (no internet?). The briefing still works.";
-    return;
-  }
-  map = L.map("map", { zoomSnap: 0.25 }).setView([38, -100], 4);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 10, attribution: "&copy; OpenStreetMap contributors",
-  }).addTo(map);
-  hazardLayer = L.layerGroup().addTo(map);
-  routeLayer = L.layerGroup().addTo(map);
-}
-
-function drawMap(briefing, allHazards) {
-  if (!map) return;
-  hazardLayer.clearLayers();
-  routeLayer.clearLayers();
-
-  const onRoute = new Map(briefing.hazards_on_route.map((h) => [h.id, h]));
-  for (const area of allHazards.areas) {
-    const hit = onRoute.get(area.id);
-    const color = hit ? hazardColor(area.hazard) : "#b9bfc8";
-    const shape = L.polygon(area.polygon, {
-      color, weight: hit ? 2 : 1, fillColor: color,
-      fillOpacity: hit ? (hit.at_your_altitude === false ? 0.08 : 0.28) : 0.05,
-    }).addTo(hazardLayer);
-    const popup = el("div");
-    popup.appendChild(el("b", area.kind + " " + area.hazard));
-    popup.appendChild(el("div", band(area.low_ft, area.high_ft)));
-    if (hit) {
-      popup.appendChild(el("div", "On your route, minutes " + hit.enter_min + " to " + hit.exit_min));
-      if (hit.at_your_altitude !== null) {
-        popup.appendChild(el("div", hit.at_your_altitude ? "At your altitude" : "Not at your altitude"));
-      }
-    } else {
-      popup.appendChild(el("div", "Not on this route"));
-    }
-    shape.bindPopup(popup);
-  }
-
-  const points = briefing.profile.map((p) => [p.lat, p.lon]);
-  const line = L.polyline(points, { color: "#0b5cad", weight: 3 }).addTo(routeLayer);
-  for (const [point, name] of [[points[0], briefing.route.from], [points[points.length - 1], briefing.route.to]]) {
-    L.circleMarker(point, { radius: 6, color: "#0b5cad", fillColor: "#fff", fillOpacity: 1, weight: 3 })
-      .bindTooltip(name, { permanent: true, direction: "top", offset: [0, -6] }).addTo(routeLayer);
-  }
-  map.fitBounds(line.getBounds(), { padding: [40, 40] });
-}
-
-// ---------- Chart ----------
-function svgNode(tag, attrs, text) {
-  const node = document.createElementNS(SVG, tag);
-  for (const key in attrs) node.setAttribute(key, attrs[key]);
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-function drawChart(briefing) {
-  const chart = $("chart");
-  clear(chart);
-  const W = 860, H = 280, left = 56, right = 52, top = 14, bottom = 34;
-  const pw = W - left - right, ph = H - top - bottom;
-  const profile = briefing.profile;
-  const total = briefing.route.duration_min || 1;
-  const maxAlt = Math.max(1000, ...profile.map((p) => p.altitude_ft)) * 1.12;
-  const minSpo2 = Math.min(60, Math.floor(Math.min(...profile.map((p) => p.spo2_pct)) / 10) * 10);
-  const x = (minute) => left + (minute / total) * pw;
-  const yAlt = (ft) => top + ph - (ft / maxAlt) * ph;
-  const ySpo2 = (pct) => top + ph - ((pct - minSpo2) / (100 - minSpo2)) * ph;
-
-  for (const h of briefing.hazards_on_route) {  // time spent inside a hazard at this altitude
-    if (h.at_your_altitude !== true || h.enter_min === null) continue;
-    chart.appendChild(svgNode("rect", { x: x(h.enter_min), y: top, width: Math.max(2, x(h.exit_min) - x(h.enter_min)),
-                                        height: ph, fill: "#f1c27d", opacity: 0.35 }));
-  }
-  for (let i = 0; i <= 4; i++) {
-    const y = top + (ph * i) / 4;
-    chart.appendChild(svgNode("line", { x1: left, x2: left + pw, y1: y, y2: y, stroke: "#e4e7ec" }));
-    chart.appendChild(svgNode("text", { x: left - 8, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "#5d6877" },
-                              Math.round((maxAlt * (4 - i)) / 4 / 100) * 100 + ""));
-    chart.appendChild(svgNode("text", { x: left + pw + 8, y: y + 4, "font-size": 11, fill: "#b3261e" },
-                              Math.round(100 - ((100 - minSpo2) * i) / 4) + "%"));
-  }
-  const ticks = Math.min(8, Math.max(2, Math.round(total / 60)));
-  for (let i = 0; i <= ticks; i++) {
-    const minute = (total * i) / ticks;
-    chart.appendChild(svgNode("text", { x: x(minute), y: H - 12, "text-anchor": "middle", "font-size": 11, fill: "#5d6877" },
-                              Math.round(minute) + " min"));
-  }
-
-  const altPath = "M" + x(0) + "," + yAlt(0) + " " +
-    profile.map((p) => "L" + x(p.minute).toFixed(1) + "," + yAlt(p.altitude_ft).toFixed(1)).join(" ") +
-    " L" + x(total) + "," + yAlt(0) + " Z";
-  chart.appendChild(svgNode("path", { d: altPath, fill: "#9fb3c8", opacity: 0.55 }));
-
-  if (minSpo2 < 90) {
-    chart.appendChild(svgNode("line", { x1: left, x2: left + pw, y1: ySpo2(90), y2: ySpo2(90),
-                                        stroke: "#b3261e", "stroke-dasharray": "5 4", "stroke-width": 1 }));
-  }
-  const spo2Path = profile.map((p, i) => (i ? "L" : "M") + x(p.minute).toFixed(1) + "," + ySpo2(p.spo2_pct).toFixed(1)).join(" ");
-  chart.appendChild(svgNode("path", { d: spo2Path, fill: "none", stroke: "#b3261e", "stroke-width": 2.2 }));
-}
-
-// ---------- Side panels ----------
-function drawPanels(briefing) {
-  const r = briefing.route, p = briefing.physiology;
-  $("routeTitle").textContent = r.from + " to " + r.to + " · " + Math.round(r.distance_nm) + " nm · " +
-    hoursMinutes(r.duration_min) + " · " + r.cruise_alt_ft.toLocaleString() + " ft" + (r.pressurized ? " pressurized" : "");
-
-  $("minSpo2").textContent = p.min_spo2_pct.toFixed(0) + "%";
-  $("minSpo2").className = p.min_spo2_pct < 85 ? "bad" : p.min_spo2_pct < 90 ? "warn" : "good";
-  $("below90").textContent = Math.round(p.minutes_below_90_pct);
-  $("below90").className = p.minutes_below_90_pct > 0 ? "warn" : "good";
-  $("fatigue").textContent = Math.round(p.fatigue_score) + "/100";
-  $("fatigue").className = p.fatigue_score >= 60 ? "bad" : p.fatigue_score >= 35 ? "warn" : "good";
-
-  const oxygen = $("oxygen");
-  clear(oxygen);
-  if (briefing.oxygen_rules.findings.length === 0) {
-    oxygen.appendChild(el("li", "No supplemental oxygen required under 14 CFR 91.211.", "good"));
-  }
-  for (const finding of briefing.oxygen_rules.findings) oxygen.appendChild(el("li", finding, "bad"));
-
-  const weather = $("weather");
-  clear(weather);
-  const wx = briefing.weather;
-  if (!wx) weather.appendChild(el("li", "No live weather feed connected.", "muted"));
-  for (const station of wx ? [wx.departure, wx.destination] : []) {
-    const item = el("li");
-    if (!station) { item.appendChild(el("span", "No current observation for one airport.", "muted")); weather.appendChild(item); continue; }
-    item.appendChild(el("b", station.station + " "));
-    item.appendChild(el("span", station.flight_category, "tag " + station.flight_category.toLowerCase()));
-    const wind = station.wind_speed_kt === null ? "wind unknown"
-      : "wind " + (station.wind_dir_deg === null ? "variable" : String(station.wind_dir_deg).padStart(3, "0") + "°") + " at " + station.wind_speed_kt + " kt";
-    const ceiling = station.ceiling_ft === null ? "no ceiling" : "ceiling " + station.ceiling_ft.toLocaleString() + " ft";
-    item.appendChild(el("div", wind + " · visibility " + (station.visibility_sm ?? "?") + " sm · " + ceiling +
-      " · altimeter " + (station.altimeter_inhg === null ? "?" : station.altimeter_inhg.toFixed(2)), "small"));
-    item.appendChild(el("div", "Observed " + station.age_min + " min ago" + (station.stale ? " · STALE, not used in calculations" : ""),
-      "small " + (station.stale ? "bad" : "muted")));
-    item.appendChild(el("div", station.raw, "raw"));
-    weather.appendChild(item);
-  }
-  if (wx) weather.appendChild(el("li", "Altimeter used: " + wx.altimeter_inhg.toFixed(2) + " (" + wx.altimeter_source + ")", "small muted"));
-
-  const hazards = $("hazards");
-  clear(hazards);
-  const feed = briefing.hazard_feed;
-  if (!feed) hazards.appendChild(el("li", "No hazard feed connected.", "muted"));
-  else if (briefing.hazards_on_route.length === 0) hazards.appendChild(el("li", "None of the " + feed.active_areas + " active areas touch this route.", "good"));
-  const inFlightOrder = [...briefing.hazards_on_route].sort((a, b) => (a.enter_min ?? 0) - (b.enter_min ?? 0));
-  for (const h of inFlightOrder) {
-    const item = el("li");
-    const swatch = el("span", "■ ");
-    swatch.style.color = hazardColor(h.hazard);
-    item.appendChild(swatch);
-    item.appendChild(el("b", h.kind + " " + h.hazard + " "));
-    item.appendChild(h.at_your_altitude === true ? el("span", "at your altitude", "tag hit")
-      : h.at_your_altitude === false ? el("span", "not at your altitude", "tag miss")
-      : el("span", "altitude not given", "tag unknown"));
-    item.appendChild(el("div", band(h.low_ft, h.high_ft) + " · minutes " + h.enter_min + " to " + h.exit_min, "small muted"));
-    hazards.appendChild(item);
-  }
-  if (feed && feed.status === "stale") hazards.appendChild(el("li", "Hazard data is stale (" + feed.age_min + " min old).", "bad"));
-}
-
-// ---------- Live alerts ----------
-let socket = null;
-function logAlert(text, isAlert) {
-  const item = el("li", undefined, isAlert ? "alert" : "");
-  item.appendChild(el("time", new Date().toLocaleTimeString()));
-  item.appendChild(document.createTextNode(text));
-  $("alerts").prepend(item);
-}
-function watchRoute(query) {
-  if (socket) { socket.onclose = null; socket.close(); }
-  clear($("alerts"));
-  $("wsDot").className = "dot";
-  const scheme = location.protocol === "https:" ? "wss://" : "ws://";
-  socket = new WebSocket(scheme + location.host + "/alerts?" + query);
-  socket.onopen = () => { $("wsDot").className = "dot on"; };
-  socket.onclose = () => { $("wsDot").className = "dot"; logAlert("Alert connection closed.", false); };
-  socket.onmessage = (event) => {
-    const message = JSON.parse(event.data);
-    if (message.type === "alert") {
-      for (const change of message.changes) logAlert(change, true);
-      brief(false);  // redraw with the new picture, keep this connection
-    } else {
-      logAlert("Watching " + message.status.from + " to " + message.status.to + ". Changes will appear here.", false);
-    }
-  };
-}
-
-// ---------- Flow ----------
-function planQuery() {
-  const params = new URLSearchParams({ from: $("from").value, to: $("to").value, alt: $("alt").value, gs: $("gs").value,
-                                       pressurized: $("pressurized").checked ? "true" : "false" });
-  return params.toString();
-}
-
 async function brief(reconnect) {
   $("error").textContent = "";
   $("go").disabled = true;
   try {
     const query = planQuery();
-    const [briefing, allHazards] = await Promise.all([getJSON("/briefing?" + query + "&step=2"), getJSON("/hazards")]);
-    drawPanels(briefing);
-    drawChart(briefing);
-    drawMap(briefing, allHazards);
+    const [briefing, hazards] = await Promise.all([
+      getJSON("/briefing?" + query + "&step=2"),
+      getJSON("/hazards").catch(() => ({ areas: [] })),
+    ]);
+    state.hazards = hazards;
+    render(briefing);
+    const rules = briefing.oxygen_rules;
+    const rule = $("liveRule");
+    const required = rules.crew_oxygen_required || rules.passenger_oxygen_required;
+    rule.textContent = required ? "Required" : "Clear";
+    rule.className = required ? "fail" : "pass";
     if (reconnect) watchRoute(query);
   } catch (error) {
     $("error").textContent = error.message;
@@ -397,28 +979,49 @@ async function brief(reconnect) {
 async function refreshFeeds() {
   try {
     const health = await getJSON("/health");
-    const wx = health.weather, hz = health.hazards;
-    const parts = [];
-    parts.push(typeof wx === "string" ? "weather " + wx : wx.stations + " stations, newest " + (wx.newest_observation_age_min ?? "?") + " min old");
-    parts.push(typeof hz === "string" ? "hazards " + hz : hz.areas + " hazard areas, " + (hz.snapshot_age_min ?? "?") + " min old");
-    $("feeds").textContent = (health.status === "ok" ? "Feeds live: " : "Feeds degraded: ") + parts.join(" · ");
-    $("feeds").className = health.status === "ok" ? "good" : "bad";
+    const feed = $("liveFeed");
+    if (health.status === "ok") { feed.textContent = "Live"; feed.className = "pass"; }
+    else { feed.textContent = "Degraded"; feed.className = "caution"; }
   } catch (error) {
-    $("feeds").textContent = "Service unreachable";
-    $("feeds").className = "bad";
+    $("liveFeed").textContent = "Down";
+    $("liveFeed").className = "fail";
+  }
+}
+
+function buildRuler() {
+  const nav = $("rulerY");
+  for (const scene of document.querySelectorAll(".scene")) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("aria-label", scene.dataset.name);
+    button.addEventListener("click", () => scene.scrollIntoView({ behavior: "smooth", block: "start" }));
+    nav.appendChild(button);
   }
 }
 
 async function start() {
+  buildRuler();
+  paintHero(null);
+  paintDots($("trackDots"), 16, emptyGrid(256, 16).cells);
+  paintDots($("altDots"), 24, emptyGrid(288, 24).cells);
+  paintDots($("dropDots"), 24, emptyGrid(24, 24).cells, true);
+  paintDots($("crewDots"), 8, emptyGrid(16, 8).cells);
+  paintDots($("paxDots"), 8, emptyGrid(16, 8).cells);
+  paintDots($("hitDots"), 10, emptyGrid(10, 10).cells, true);
+  scrubPaint(0);
   initMap();
   refreshFeeds();
   setInterval(refreshFeeds, 30000);
+  addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
   try {
     const list = (await getJSON("/airports")).airports;
     for (const id of ["from", "to"]) {
-      for (const airport of list) $(id).appendChild(new Option(airport.icao + (airport.live_weather ? "" : " (no live weather)"), airport.icao));
+      for (const airport of list) {
+        const label = airport.icao + (airport.live_weather ? "" : " · no wx");
+        $(id).appendChild(new Option(label, airport.icao));
+      }
     }
-    // Default demo flight: Phoenix to New Century AirCenter in Olathe, Kansas.
     const codes = list.map((a) => a.icao);
     $("from").value = codes.includes("KPHX") ? "KPHX" : codes[0];
     $("to").value = codes.includes("KIXD") ? "KIXD" : codes[codes.length - 1];
@@ -426,6 +1029,15 @@ async function start() {
   } catch (error) {
     $("error").textContent = error.message;
   }
+  place();
+  setTimeout(place, 500);
+}
+
+function place() {
+  const at = new URLSearchParams(location.search).get("at");
+  if (!at) { window.scrollTo(0, 0); return; }
+  const scene = document.querySelector('[data-scene="' + at.padStart(2, "0") + '"]');
+  if (scene) scene.scrollIntoView({ block: "start" });
 }
 
 $("plan").addEventListener("submit", (event) => { event.preventDefault(); brief(true); });

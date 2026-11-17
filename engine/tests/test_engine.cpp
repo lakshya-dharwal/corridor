@@ -1,5 +1,6 @@
 // Dependency-free test runner so the engine can be verified with nothing but a
 // C++20 compiler. Swap for GoogleTest once CI is set up.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -851,6 +852,240 @@ static void test_alerts() {
     ::close(client);
 }
 
+static void test_saved_routes() {
+    const Request plan = get_request("/alerts?from=kphx&to=KIXD&alt=13500&gs=140&pressurized=false");
+    CHECK(route_key(plan) == "KPHX|KIXD|13500|140|0");
+    CHECK(route_key(get_request("/alerts?from=KPHX&to=KIXD")) == "KPHX|KIXD|8000|140|0");
+
+    RouteStatus before;
+    before.departure = "KPHX";
+    before.destination = "KIXD";
+    before.departure_category = "VFR";
+    before.destination_category = "VFR";
+    before.crew_oxygen_required = true;
+    before.hazard_feed = "ok";
+    before.min_spo2 = 0.82;
+    before.hazards.push_back({"H1", "G-AIRMET ICE", 0.0, 20000.0, 150.0, 295.0, true});
+
+    const auto path = std::filesystem::temp_directory_path() / "corridor-saved-routes-test.tsv";
+    std::filesystem::remove(path);
+    {
+        SavedRoutes saved(path.string());
+        saved.remember(route_key(plan), before);
+        CHECK(saved.size() == 1);
+    }
+    SavedRoutes reloaded(path.string());
+    const auto stored = reloaded.find(route_key(plan));
+    CHECK(stored.has_value());
+    if (stored) {
+        CHECK(stored->departure_category == "VFR");
+        CHECK(stored->crew_oxygen_required);
+        CHECK(stored->hazards.size() == 1 && stored->hazards[0].id == "H1");
+        CHECK(stored->hazards[0].at_altitude && *stored->hazards[0].at_altitude);
+        CHECK_NEAR(stored->min_spo2, 0.82, 1e-6);
+    }
+    std::filesystem::remove(path);
+
+    // A second connection hears what changed after the first one closed, including
+    // across a new hub that only has the journal file.
+    const auto watch = std::filesystem::temp_directory_path() / "corridor-saved-watch-test.tsv";
+    std::filesystem::remove(watch);
+    RouteStatus live = before;
+    std::atomic<std::uint64_t> version{1};
+    auto listen = [&](AlertHub& hub, const RouteStatus& initial) {
+        int sockets[2];
+        CHECK(::socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0);
+        timeval timeout{};
+        timeout.tv_sec = 5;
+        ::setsockopt(sockets[0], SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        const std::string handshake = "HTTP/1.1 101 Switching Protocols\r\n\r\n";
+        CHECK(hub.add(sockets[1], plan, initial, handshake));
+        std::string greeting(handshake.size(), '\0');
+        CHECK(::recv(sockets[0], greeting.data(), greeting.size(), MSG_WAITALL) ==
+              static_cast<ssize_t>(handshake.size()));
+        auto frame = read_server_frame(sockets[0]);
+        const std::string close = client_frame(WsOpcode::Close, "\x03\xE8");
+        CHECK(::send(sockets[0], close.data(), close.size(), 0) == static_cast<ssize_t>(close.size()));
+        auto closed = read_server_frame(sockets[0]);
+        CHECK(closed && closed->opcode == WsOpcode::Close);
+        ::close(sockets[0]);
+        return frame ? frame->payload : std::string();
+    };
+
+    {
+        SavedRoutes fresh(watch.string());
+        AlertHub hub([&](const Request&) { return live; }, [&] { return version.load(); }, 4, &fresh);
+        hub.start();
+        const std::string first = listen(hub, before);
+        CHECK(first.find("\"type\": \"status\"") != std::string::npos);
+        CHECK(first.find("resumed") == std::string::npos);
+        hub.stop();
+    }
+
+    live.destination_category = "IFR";
+    live.hazards.clear();
+    SavedRoutes resumed(watch.string());
+    CHECK(resumed.size() == 1);
+    AlertHub hub([&](const Request&) { return live; }, [&] { return version.load(); }, 4, &resumed);
+    hub.start();
+    const std::string again = listen(hub, live);
+    CHECK(again.find("\"type\": \"alert\"") != std::string::npos);
+    CHECK(again.find("\"resumed\": true") != std::string::npos);
+    CHECK(again.find("KIXD flight category changed from VFR to IFR") != std::string::npos);
+    CHECK(again.find("Hazard no longer on route: G-AIRMET ICE") != std::string::npos);
+    CHECK(hub.alerts_sent() == 1);
+    hub.stop();
+    std::filesystem::remove(watch);
+}
+
+static const char* kTafText =
+    "#corridor-taf v1 generated=1001200\n"
+    "KIXD\t1000000\t1000000\t9000000\t1\t1001260\t\t1\tVFR\t\t10\t160\t7\t\t\tTAF KIXD BASE\n"
+    "KIXD\t1000000\t1000000\t9000000\t1001260\t9000000\tFM\t1\tIFR\t800\t2\t170\t12\t\t\tTAF KIXD FM\n"
+    "KIXD\t1000000\t1000000\t9000000\t1001260\t9000000\tTEMPO\t0\tLIFR\t200\t0.5\t170\t12\t20\t\tTAF KIXD TEMPO\n"
+    "KIXD\t1000000\t1000000\t9000000\t1001260\t9000000\tTEMPO\t0\tVFR\t\t10\t180\t10\t25\t\tgust only\n";
+
+static void test_taf() {
+    TafSnapshot snapshot;
+    std::string error;
+    {
+        std::istringstream in(kTafText);
+        CHECK(parse_taf_snapshot(in, snapshot, error));
+    }
+    CHECK(snapshot.generated_epoch == 1001200);
+    CHECK(snapshot.stations.at("KIXD").size() == 4);
+    CHECK(category_rank("LIFR") > category_rank("IFR"));
+
+    // The first hour is the base line. A gust-only TEMPO is not a worse category.
+    const auto early = forecast_at(snapshot, "KIXD", 1000, 1);
+    CHECK(early && early->flight_category == "VFR");
+    CHECK(early && early->tempo_category.empty());
+
+    // Hours later the FM line prevails, and the worse TEMPO is the one reported.
+    const auto later = forecast_at(snapshot, "KIXD", 1100000, 381);
+    CHECK(later && later->flight_category == "IFR");
+    CHECK(later && later->change == "FM");
+    CHECK(later && later->tempo_category == "LIFR" && later->tempo_change == "TEMPO");
+    CHECK(later && later->tempo_gust_kt && *later->tempo_gust_kt == 20.0);
+    CHECK(!forecast_at(snapshot, "KIXD", 9000000, 1));
+    CHECK(!forecast_at(snapshot, "KDEN", 1100000, 1));
+
+    auto rejects = [](const std::string& text) {
+        std::istringstream in(text);
+        TafSnapshot out;
+        std::string why;
+        return !parse_taf_snapshot(in, out, why) && !why.empty();
+    };
+    CHECK(rejects("#corridor-taf v1 generated=1\nKIXD\t1\t1\t2\t1\t2\tFM\t1\tVFR\n"));
+    CHECK(rejects("#corridor-taf v1 generated=1\nKIXD\t1\t1\t2\t1\t2\tFM\tmaybe\tVFR\t\t\t\t\t\t\t\n"));
+
+    const std::int64_t now = 1001200;
+    const std::string target = "/briefing?from=KPHX&to=KIXD&alt=13500&gs=140";
+    const Response brief = briefing_endpoint(get_request(target), demo_airports(), nullptr, now,
+                                             nullptr, &snapshot);
+    CHECK(brief.status == 200);
+    CHECK(brief.body.find("\"arrival\"") != std::string::npos);
+    CHECK(brief.body.find("\"flight_category\": \"IFR\"") != std::string::npos);
+    CHECK(brief.body.find("\"tempo_category\": \"LIFR\"") != std::string::npos);
+
+    const auto status = route_status(get_request(target), demo_airports(), nullptr, now, nullptr,
+                                     nullptr, &snapshot);
+    CHECK(status && status->arrival_category == "IFR");
+    CHECK(status && status->arrival_tempo == "TEMPO LIFR");
+    CHECK(status && status->destination_category.empty());
+
+    RouteStatus before = *status;
+    before.arrival_category = "VFR";
+    before.arrival_tempo.clear();
+    const auto changes = diff_route_status(before, *status);
+    CHECK(std::find(changes.begin(), changes.end(),
+                    "KIXD at arrival changed from VFR to IFR") != changes.end());
+    CHECK(std::find(changes.begin(), changes.end(),
+                    "KIXD at arrival now includes TEMPO LIFR") != changes.end());
+
+    // A forecast file older than 30 minutes is still shown and does not drive alerts.
+    snapshot.generated_epoch = now - 40 * 60;
+    const Response stale = briefing_endpoint(get_request(target), demo_airports(), nullptr, now,
+                                             nullptr, &snapshot);
+    CHECK(stale.body.find("\"status\": \"stale\"") != std::string::npos);
+    CHECK(stale.body.find("\"flight_category\": \"IFR\"") != std::string::npos);
+    const auto quiet = route_status(get_request(target), demo_airports(), nullptr, now, nullptr,
+                                    nullptr, &snapshot);
+    CHECK(quiet && quiet->arrival_category.empty());
+    CHECK(quiet && quiet->arrival_tempo.empty());
+}
+
+static double duration_min_of(const std::string& body) {
+    const auto at = body.find("\"duration_min\": ");
+    if (at == std::string::npos) return 0.0;
+    return std::strtod(body.c_str() + at + 16, nullptr);
+}
+
+static void test_wind() {
+    CHECK_NEAR(along_track_kt(90, 20, 90), -20, 1e-6);   // wind on the nose
+    CHECK_NEAR(along_track_kt(270, 20, 90), 20, 1e-6);   // wind on the tail
+    CHECK_NEAR(along_track_kt(0, 20, 90), 0, 1e-6);      // pure crosswind
+
+    const double course = initial_bearing_deg(kPhx.pos, kIxd.pos);
+    const double from = std::fmod(course + 180.0, 360.0);
+    const std::int64_t now = 1700000000;
+    std::ostringstream snap;
+    snap << std::fixed << "#corridor-wind v1 generated=" << now << "\n";
+    auto row = [&](LatLon pos, std::int64_t epoch, double alt) {
+        snap << pos.lat_deg << "\t" << pos.lon_deg << "\t" << epoch << "\t" << alt << "\t" << from
+             << "\t40\n";
+    };
+    for (int hour = 0; hour <= 8; ++hour) {
+        const std::int64_t epoch = now + static_cast<std::int64_t>(hour) * 3600;
+        row(kPhx.pos, epoch, 9880);
+        row(kPhx.pos, epoch, 18280);
+        row(kIxd.pos, epoch, 9880);
+        row(kIxd.pos, epoch, 18280);
+    }
+
+    WindSnapshot winds;
+    std::string error;
+    {
+        std::istringstream in(snap.str());
+        CHECK(parse_wind_snapshot(in, winds, error));
+    }
+    const auto flow = route_wind(winds, {kPhx.pos, kIxd.pos}, 13500, now, 140);
+    CHECK(flow && flow->tailwind_kt > 25.0);
+    CHECK(flow && flow->groundspeed_kt > 165.0);
+
+    const std::string target = "/briefing?from=KPHX&to=KIXD&alt=13500&gs=140";
+    const Response calm = briefing_endpoint(get_request(target), demo_airports(), nullptr, now);
+    const Response blown = briefing_endpoint(get_request(target), demo_airports(), nullptr, now,
+                                             nullptr, nullptr, &winds);
+    CHECK(duration_min_of(blown.body) < duration_min_of(calm.body) - 30.0);
+    CHECK(blown.body.find("\"tailwind_kt\":") != std::string::npos);
+
+    const auto status = route_status(get_request(target), demo_airports(), nullptr, now, nullptr,
+                                     nullptr, nullptr, &winds);
+    CHECK(status && status->tailwind_kt && *status->tailwind_kt > 25);
+    RouteStatus slower = *status;
+    slower.tailwind_kt = *status->tailwind_kt - 20;
+    const auto changes = diff_route_status(slower, *status);
+    CHECK(std::find(changes.begin(), changes.end(),
+                    "Wind along the route changed from " +
+                        std::to_string(*slower.tailwind_kt) + " kt tailwind to " +
+                        std::to_string(*status->tailwind_kt) + " kt tailwind") != changes.end());
+
+    winds.generated_epoch = now - 40 * 60;
+    const Response stale = briefing_endpoint(get_request(target), demo_airports(), nullptr, now,
+                                             nullptr, nullptr, &winds);
+    CHECK(std::fabs(duration_min_of(stale.body) - duration_min_of(calm.body)) < 0.05);
+    CHECK(stale.body.find("\"wind\"") != std::string::npos);
+    CHECK(stale.body.find("\"status\": \"stale\"") != std::string::npos);
+    const auto quiet = route_status(get_request(target), demo_airports(), nullptr, now, nullptr,
+                                    nullptr, nullptr, &winds);
+    CHECK(quiet && !quiet->tailwind_kt);
+
+    std::istringstream bad("#corridor-wind v1 generated=1\n10\t20\t1\n");
+    WindSnapshot rejected;
+    CHECK(!parse_wind_snapshot(bad, rejected, error) && !error.empty());
+}
+
 int main() {
     test_http_parsing();
     test_api();
@@ -858,6 +1093,9 @@ int main() {
     test_hazards();
     test_websocket();
     test_alerts();
+    test_saved_routes();
+    test_taf();
+    test_wind();
     test_atmosphere();
     test_oxygen();
     test_oxygen_rules();
