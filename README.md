@@ -30,7 +30,8 @@ Educational project. Not medical advice and not for operational flight planning.
 | Trust score | Built. SpO2 gap vs Cottrell 1995 and Muhm 2007, plus the median wind shift on 20 routes |
 | Linux web service: container, TLS proxy, request ids | Built. `deploy/docker-compose.yml` starts the C++ server and the proxy |
 | ADS-B traffic inside the corridor, at briefing time | Built, tested |
-| Load test and a public deploy | Not started |
+| Public service | https://corridor-ykd2.onrender.com |
+| Load test | Not started |
 
 ## Demo
 
@@ -40,7 +41,9 @@ One command builds the server if needed, starts the weather, hazard, forecast, w
 tools/run_demo.sh 8080
 ```
 
-Then open http://127.0.0.1:8080/. It loads a flight from Phoenix to New Century
+Then open http://127.0.0.1:8080/. The route bar and the scene buttons stay on screen, so you can change the flight or jump to the map from any section.
+
+The same service is public at https://corridor-ykd2.onrender.com. The free instance sleeps when it is idle, so the first open after that takes a moment. It loads a flight from Phoenix to New Century
 AirCenter in Olathe, Kansas, with current weather at both ends, the hazard areas the
 route crosses, the equipped aircraft inside the corridor at that moment, the estimated
 blood-oxygen curve, and a live alert feed. Pick any other
