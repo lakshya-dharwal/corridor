@@ -15,6 +15,19 @@
 
 namespace corridor {
 
+// Reads one archived generation. A missing file is an error: callers must not
+// quietly fall back to the live snapshot, or a replay would not be reproducible.
+template <typename Snapshot, typename Parser>
+bool load_generation(const std::filesystem::path& file, Parser parser, Snapshot& out,
+                     std::string& error) {
+    std::ifstream in(file);
+    if (!in) {
+        error = "no snapshot " + file.string();
+        return false;
+    }
+    return parser(in, out, error);
+}
+
 template <typename Snapshot>
 class SnapshotStore {
 public:

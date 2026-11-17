@@ -19,6 +19,11 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+try:
+    from publish import publish
+except ImportError:  # invoked as a module from the repo root
+    from ingest.publish import publish
+
 API_URL = "https://aviationweather.gov/api/data/metar"
 HPA_PER_INHG = 33.8639
 FEET_PER_METER = 3.28084
@@ -159,8 +164,10 @@ def record_feed_error(database_url: str, error: Exception) -> None:
 
 def write_snapshot(rows: list[dict], path: str) -> int:
     """Publishes the latest observations for the service. Written to a temp file
-    and renamed, so the service never reads a half-written snapshot."""
-    lines = [f"#corridor-weather v1 generated={int(time.time())}"]
+    and renamed, so the service never reads a half-written snapshot. The same
+    bytes are kept under history/weather so that generation can be replayed."""
+    epoch = int(time.time())
+    lines = [f"#corridor-weather v1 generated={epoch}"]
     written = 0
     for row in rows:
         if row["lat"] is None or row["lon"] is None or row["elevation_ft"] is None:
@@ -168,10 +175,7 @@ def write_snapshot(rows: list[dict], path: str) -> int:
         fields = ["" if row[name] is None else str(row[name]) for name in SNAPSHOT_FIELDS]
         lines.append("\t".join(field.replace("\t", " ").replace("\n", " ") for field in fields))
         written += 1
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    os.replace(temp_path, path)
+    publish(path, "\n".join(lines) + "\n", feed="weather", epoch=epoch)
     return written
 
 

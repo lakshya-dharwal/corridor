@@ -15,12 +15,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+
+try:
+    from publish import publish
+except ImportError:  # invoked as a module from the repo root
+    from ingest.publish import publish
 
 API_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -79,17 +83,15 @@ def records_of(points: list[dict]) -> list[dict]:
 
 
 def write_snapshot(rows: list[dict], path: str) -> int:
-    lines = [f"#corridor-wind v1 generated={int(time.time())}"]
+    epoch = int(time.time())
+    lines = [f"#corridor-wind v1 generated={epoch}"]
     for row in rows:
         fields = [
             f"{row['lat']:.4f}", f"{row['lon']:.4f}", str(row["valid_epoch"]),
             str(row["alt_ft"]), str(row["dir_deg"]), str(row["speed_kt"]),
         ]
         lines.append("\t".join(fields))
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    os.replace(temp_path, path)
+    publish(path, "\n".join(lines) + "\n", feed="wind", epoch=epoch)
     return len(rows)
 
 

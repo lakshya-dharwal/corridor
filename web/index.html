@@ -343,6 +343,7 @@
       <p class="kicker">Track</p>
       <p class="giant" id="dist">—<small>NM</small></p>
       <p class="lede" id="trackLede">The route, sampled onto a lattice. Near side solid. Far side faded.</p>
+      <p class="fine" id="sources"></p>
     </div>
     <div class="frame">
       <div class="frame-head">
@@ -634,6 +635,26 @@ function paintTicks(host, labels) {
 const state = { briefing: null };
 let map = null, routeLayer = null, hazardLayer = null, socket = null;
 
+function sourceClock(epoch) {
+  if (!epoch) return "—";
+  const d = new Date(epoch * 1000);
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return hh + ":" + mm + "Z";
+}
+
+function renderSources(sources) {
+  const line = $("sources");
+  if (!sources) {
+    line.textContent = "";
+    return;
+  }
+  line.textContent = "wx " + sourceClock(sources.weather)
+    + " · hazards " + sourceClock(sources.hazards)
+    + " · taf " + sourceClock(sources.taf)
+    + " · wind " + sourceClock(sources.wind);
+}
+
 function paintHero(pct) {
   const grid = spo2Grid(pct);
   paintDots($("heroDots"), grid.columns, grid.cells);
@@ -657,6 +678,7 @@ function render(briefing) {
     windText = " Wind forecast is stale.";
   }
   $("trackLede").textContent = route.from + " to " + route.to + ", " + hoursMinutes(route.duration_min) + "." + windText;
+  renderSources(briefing.sources);
   const track = trackGrid(profile);
   paintDots($("trackDots"), track.columns, track.cells);
   $("trackEnds").textContent = route.from + " → " + route.to;

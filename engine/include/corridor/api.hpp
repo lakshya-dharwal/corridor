@@ -44,6 +44,15 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
                            const TafSnapshot* tafs = nullptr,
                            const WindSnapshot* winds = nullptr);
 
+// Replay from archived generations. Returns nullopt when the request does not
+// name one, so the caller keeps using the live snapshots. A named feed is read
+// from `<history_root>/<feed>/<epoch>.tsv`; a feed that is not named is omitted,
+// not filled from the live file. `evaluated_at` is the clock for the arrival
+// time, the wind hour, and stale checks. If it is absent, the newest named
+// generation is the clock.
+std::optional<Response> replay_briefing(const Request& request, const AirportTable& airports,
+                                        const std::string& history_root);
+
 // GET /airports
 Response airports_endpoint(const AirportTable& airports,
                            const WeatherSnapshot* weather = nullptr);
@@ -82,6 +91,13 @@ struct RouteStatus {
     double min_spo2 = 1.0;
     std::string hazard_feed = "not configured";  // "ok", "stale" or "not configured"
     std::vector<RouteHazard> hazards;
+    // Generations this status was computed from. Zero means that feed was not
+    // used. A newer epoch with the same picture is not a change.
+    std::int64_t evaluated_at = 0;
+    std::int64_t weather_epoch = 0;
+    std::int64_t hazards_epoch = 0;
+    std::int64_t taf_epoch = 0;
+    std::int64_t wind_epoch = 0;
 };
 
 // Status for the route described by the same query parameters as /briefing.

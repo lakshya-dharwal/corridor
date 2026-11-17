@@ -8,6 +8,7 @@
 //   CORRIDOR_HAZARD_SNAPSHOT    snapshot file written by ingest/hazard_worker.py
 //   CORRIDOR_TAF_SNAPSHOT       snapshot file written by ingest/taf_worker.py
 //   CORRIDOR_WIND_SNAPSHOT      snapshot file written by ingest/wind_worker.py
+//   CORRIDOR_HISTORY            archived generations, default <snapshot dir>/history
 //   CORRIDOR_WEB_ROOT           folder holding the demo page, default "web"
 //
 // Routes: /  (demo page)  /health  /airports  /briefing  /hazards  /metrics
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <sstream>
@@ -50,6 +52,21 @@ std::string setting(int argc, char** argv, int index, const char* env_name,
     return value ? value : fallback;
 }
 
+// Generations live beside the snapshots the workers already publish. A missing
+// directory only means replay has nothing to open; live briefings do not read it.
+std::string history_root_of(const std::string& weather, const std::string& hazards,
+                            const std::string& taf, const std::string& wind) {
+    if (const char* env = std::getenv("CORRIDOR_HISTORY")) {
+        if (*env) return env;
+    }
+    for (const std::string& path : {weather, hazards, taf, wind}) {
+        if (path.empty()) continue;
+        const auto parent = std::filesystem::path(path).parent_path();
+        return (parent.empty() ? std::filesystem::path("history") : parent / "history").string();
+    }
+    return "run/history";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -61,6 +78,7 @@ int main(int argc, char** argv) {
     const std::string taf_path = setting(0, nullptr, 1, "CORRIDOR_TAF_SNAPSHOT", "");
     const std::string wind_path = setting(0, nullptr, 1, "CORRIDOR_WIND_SNAPSHOT", "");
     const std::string saved_path = setting(0, nullptr, 1, "CORRIDOR_SAVED_ROUTES", "run/saved_routes.tsv");
+    const std::string history_root = history_root_of(weather_path, hazard_path, taf_path, wind_path);
     if (port <= 0 || port > 65535) {
         std::fprintf(stderr, "invalid port\n");
         return 2;
@@ -115,6 +133,7 @@ int main(int argc, char** argv) {
         return airports_endpoint(airports, wx.get());
     });
     server.get("/briefing", [&](const Request& request) {
+        if (const auto replayed = replay_briefing(request, airports, history_root)) return *replayed;
         const auto wx = weather ? weather->current() : nullptr;
         const auto hz = hazards ? hazards->current() : nullptr;
         const auto tf = tafs ? tafs->current() : nullptr;
@@ -170,11 +189,12 @@ int main(int argc, char** argv) {
 
     hub.start();
     std::fprintf(stderr,
-                 "corridor_server listening on %s:%d, weather: %s, hazards: %s, taf: %s, wind: %s, saved routes: %s\n",
+                 "corridor_server listening on %s:%d, weather: %s, hazards: %s, taf: %s, wind: %s, saved routes: %s, history: %s\n",
                  host.c_str(), port, weather ? weather_path.c_str() : "not configured",
                  hazards ? hazard_path.c_str() : "not configured",
                  tafs ? taf_path.c_str() : "not configured",
-                 winds ? wind_path.c_str() : "not configured", saved_path.c_str());
+                 winds ? wind_path.c_str() : "not configured", saved_path.c_str(),
+                 history_root.c_str());
     // Browsers open spare connections and hold them idle, so leave headroom.
     const bool started = server.listen(host, static_cast<std::uint16_t>(port), 8);
     hub.stop();

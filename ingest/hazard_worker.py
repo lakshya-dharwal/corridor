@@ -22,6 +22,11 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
+try:
+    from publish import publish
+except ImportError:  # invoked as a module from the repo root
+    from ingest.publish import publish
+
 SIGMET_URL = "https://aviationweather.gov/api/data/airsigmet?format=json"
 GAIRMET_URL = "https://aviationweather.gov/api/data/gairmet?format=json"
 FEED_NAME = "hazards"
@@ -157,15 +162,14 @@ def fetch_hazards() -> list[dict]:
 
 
 def write_snapshot(areas: list[dict], path: str) -> None:
-    lines = [f"#corridor-hazards v1 generated={int(time.time())}"]
+    epoch = int(time.time())
+    lines = [f"#corridor-hazards v1 generated={epoch}"]
     for area in areas:
         fields = ["" if area[name] is None else str(area[name]) for name in SNAPSHOT_FIELDS]
         fields.append(";".join(f"{lat:.4f},{lon:.4f}" for lat, lon in area["polygon"]))
         lines.append("\t".join(fields))
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    os.replace(temp_path, path)  # atomic: the service never sees a partial file
+    # Atomic replace, then a copy of that generation for replay.
+    publish(path, "\n".join(lines) + "\n", feed="hazards", epoch=epoch)
 
 
 def to_wkt(polygon) -> str:

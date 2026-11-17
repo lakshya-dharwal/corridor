@@ -380,7 +380,8 @@ static void test_weather() {
     CHECK(live.body.find("\"destination\": null") != std::string::npos);  // no KIXD METAR
     CHECK(live.body.find("\"min_spo2_pct\": 81.5") == std::string::npos);
     CHECK(standard.body.find("\"min_spo2_pct\": 81.5") != std::string::npos);
-    CHECK(standard.body.find("\"weather\"") == std::string::npos);
+    CHECK(standard.body.find("\"weather\": {") == std::string::npos);  // no live weather section
+    CHECK(standard.body.find("\"weather\": null") != std::string::npos);
 
     // A stale METAR is shown and flagged but not used in the calculation.
     const Response stale = briefing_endpoint(get_request(target), airports, &snapshot, stale_now);
@@ -1086,6 +1087,117 @@ static void test_wind() {
     CHECK(!parse_wind_snapshot(bad, rejected, error) && !error.empty());
 }
 
+static void test_replay() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "corridor-replay-test";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "weather");
+    fs::create_directories(dir / "hazards");
+
+    const std::int64_t now = 1700000000;
+    const std::int64_t first_epoch = 1700000000;
+    const std::int64_t second_epoch = 1700000300;
+    auto weather_text = [](std::int64_t generated, std::int64_t observed, const char* altimeter) {
+        std::ostringstream out;
+        out << "#corridor-weather v1 generated=" << generated << "\n";
+        auto row = [&](const char* id, double lat, double lon, double elev) {
+            out << id << "\t" << lat << "\t" << lon << "\t" << elev << "\t" << observed
+                << "\tVFR\t\t10\t230\t4\t22.2\t" << altimeter << "\tMETAR " << id << "\n";
+        };
+        row("KPHX", 33.4343, -112.0116, 1135);
+        row("KIXD", 38.8309, -94.8903, 1087);
+        return out.str();
+    };
+    {
+        std::ofstream out(dir / "weather" / (std::to_string(first_epoch) + ".tsv"));
+        out << weather_text(first_epoch, now - 600, "29.42");
+    }
+    {
+        std::ofstream out(dir / "weather" / (std::to_string(second_epoch) + ".tsv"));
+        out << weather_text(second_epoch, now - 300, "28.50");
+    }
+    {
+        std::ofstream out(dir / "hazards" / (std::to_string(first_epoch) + ".tsv"));
+        out << "#corridor-hazards v1 generated=" << first_epoch << "\n"
+            << "GA-1\tG-AIRMET\tTURB-LO\t" << (now - 3600) << "\t" << (now + 3600)
+            << "\t0\t12000\t33.0,-112.0;34.0,-112.0;34.0,-111.0;33.0,-111.0\n";
+    }
+    {
+        std::ofstream out(dir / "weather" / "1700000900.tsv");
+        out << "#corridor-weather v1 generated=1\n"
+            << "KPHX\t33.4343\t-112.0116\t1135\t" << (now - 600)
+            << "\tVFR\t\t10\t230\t4\t22.2\t29.92\tMETAR KPHX\n";
+    }
+
+    WeatherSnapshot loaded;
+    std::string error;
+    CHECK(load_generation(dir / "weather" / "1700000000.tsv", parse_snapshot, loaded, error));
+    CHECK(loaded.generated_epoch == first_epoch);
+    CHECK(!load_generation(dir / "weather" / "999.tsv", parse_snapshot, loaded, error));
+    CHECK(error.find("no snapshot") != std::string::npos);
+
+    const std::string root = dir.string();
+    const auto live = replay_briefing(get_request("/briefing?from=KPHX&to=KIXD&alt=13500&gs=140"),
+                                      demo_airports(), root);
+    CHECK(!live);
+
+    const std::string q1 = "/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=" +
+                           std::to_string(first_epoch) + "&evaluated_at=" + std::to_string(now);
+    const auto first = replay_briefing(get_request(q1), demo_airports(), root);
+    CHECK(first && first->status == 200);
+    CHECK(first->body.find("\"evaluated_at\": 1700000000") != std::string::npos);
+    CHECK(first->body.find("\"weather\": 1700000000") != std::string::npos);
+    CHECK(first->body.find("\"hazards\": null") != std::string::npos);
+    CHECK(first->body.find("\"taf\": null") != std::string::npos);
+    CHECK(first->body.find("\"wind\": null") != std::string::npos);
+    CHECK(first->body.find("29.42") != std::string::npos);
+
+    const std::string q2 = "/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=" +
+                           std::to_string(second_epoch) + "&evaluated_at=" + std::to_string(now);
+    const auto second = replay_briefing(get_request(q2), demo_airports(), root);
+    CHECK(second && second->status == 200);
+    CHECK(second->body.find("28.50") != std::string::npos);
+    CHECK(second->body != first->body);
+
+    const auto again = replay_briefing(get_request(q1), demo_airports(), root);
+    CHECK(again && again->body == first->body);
+
+    const auto with_hazards = replay_briefing(
+        get_request(q1 + "&hazards_at=" + std::to_string(first_epoch)), demo_airports(), root);
+    CHECK(with_hazards && with_hazards->status == 200);
+    CHECK(with_hazards->body.find("\"hazards\": 1700000000") != std::string::npos);
+
+    const auto missing = replay_briefing(
+        get_request("/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=42"), demo_airports(),
+        root);
+    CHECK(missing && missing->status == 404);
+
+    const auto junk = replay_briefing(
+        get_request("/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=abc"), demo_airports(),
+        root);
+    CHECK(junk && junk->status == 400);
+
+    const auto mismatch = replay_briefing(
+        get_request("/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=1700000900"),
+        demo_airports(), root);
+    CHECK(mismatch && mismatch->status == 400);
+
+    WeatherSnapshot weather;
+    {
+        std::istringstream in(weather_text(first_epoch, now - 600, "29.42"));
+        CHECK(parse_snapshot(in, weather, error));
+    }
+    const auto status = route_status(get_request("/briefing?from=KPHX&to=KIXD&alt=13500&gs=140"),
+                                     demo_airports(), &weather, now);
+    CHECK(status && status->weather_epoch == first_epoch);
+    CHECK(route_status_json(*status).find("\"sources\"") != std::string::npos);
+    RouteStatus shifted = *status;
+    shifted.weather_epoch += 300;
+    CHECK(diff_route_status(*status, shifted).empty());
+
+    fs::remove_all(dir);
+}
+
 int main() {
     test_http_parsing();
     test_api();
@@ -1096,6 +1208,7 @@ int main() {
     test_saved_routes();
     test_taf();
     test_wind();
+    test_replay();
     test_atmosphere();
     test_oxygen();
     test_oxygen_rules();

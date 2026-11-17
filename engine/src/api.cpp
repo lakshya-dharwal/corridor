@@ -4,6 +4,9 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -137,7 +140,22 @@ struct Evaluated {
     std::int64_t wind_age = 0;
     double airspeed_kt = 0.0;
     std::optional<RouteWind> wind;
+    std::int64_t evaluated_at = 0;
+    std::int64_t weather_epoch = 0;
+    std::int64_t hazards_epoch = 0;
+    std::int64_t taf_epoch = 0;
+    std::int64_t wind_epoch = 0;
 };
+
+std::string sources_json(std::int64_t evaluated_at, std::int64_t weather, std::int64_t hazards,
+                         std::int64_t taf, std::int64_t wind) {
+    auto field = [](std::int64_t value) {
+        return value > 0 ? std::to_string(value) : std::string("null");
+    };
+    return "{\"evaluated_at\": " + field(evaluated_at) + ", \"weather\": " + field(weather) +
+           ", \"hazards\": " + field(hazards) + ", \"taf\": " + field(taf) +
+           ", \"wind\": " + field(wind) + "}";
+}
 
 // Throws ParamError for a bad request and std::invalid_argument for a plan the
 // engine rejects.
@@ -197,6 +215,12 @@ Evaluated evaluate(const Request& request, const AirportTable& airports,
             result.wind_applied = true;
         }
     }
+
+    result.evaluated_at = now_epoch;
+    if (weather) result.weather_epoch = weather->generated_epoch;
+    if (hazards) result.hazards_epoch = hazards->generated_epoch;
+    if (tafs) result.taf_epoch = tafs->generated_epoch;
+    if (winds) result.wind_epoch = winds->generated_epoch;
 
     result.briefing = build_briefing(plan, active);
     if (tafs) {
@@ -358,6 +382,8 @@ Response briefing_endpoint(const Request& request, const AirportTable& airports,
         const Evaluated e = evaluate(request, airports, weather, now_epoch, hazards, tafs, winds);
 
         std::vector<std::pair<std::string, std::string>> extra;
+        extra.emplace_back("sources", sources_json(e.evaluated_at, e.weather_epoch, e.hazards_epoch,
+                                                   e.taf_epoch, e.wind_epoch));
         if (weather) {
             extra.emplace_back(
                 "weather",
@@ -416,6 +442,11 @@ std::optional<RouteStatus> route_status(const Request& request, const AirportTab
         status.passenger_oxygen_required = e.briefing.oxygen.passenger_oxygen_required;
         status.min_spo2 = e.briefing.min_spo2;
         status.hazard_feed = hazard_feed_status(e);
+        status.evaluated_at = e.evaluated_at;
+        status.weather_epoch = e.weather_epoch;
+        status.hazards_epoch = e.hazards_epoch;
+        status.taf_epoch = e.taf_epoch;
+        status.wind_epoch = e.wind_epoch;
         for (const HazardHit& hit : e.briefing.hazard_hits) {
             status.hazards.push_back({hit.hazard.id, hit.hazard.kind + " " + hit.hazard.hazard_type,
                                       hit.hazard.low_ft, hit.hazard.high_ft, hit.enter_min,
@@ -501,8 +532,84 @@ std::string route_status_json(const RouteStatus& status) {
             << optional_json(hazard.exit_min, 0) << ", \"at_your_altitude\": "
             << (hazard.at_altitude ? (*hazard.at_altitude ? "true" : "false") : "null") << "}";
     }
-    out << "]}";
+    out << "], \"sources\": "
+        << sources_json(status.evaluated_at, status.weather_epoch, status.hazards_epoch,
+                        status.taf_epoch, status.wind_epoch)
+        << "}";
     return out.str();
+}
+
+template <typename Snapshot, typename Parser>
+const Snapshot* load_replay_feed(const Request& request, const char* param_name, const char* feed,
+                                 const std::string& history_root, Parser parser, Snapshot& storage,
+                                 std::int64_t& newest, Response& error, bool& failed) {
+    if (failed) return nullptr;
+    const auto text = param(request, param_name);
+    if (!text) return nullptr;
+    errno = 0;
+    char* end = nullptr;
+    const long long epoch = std::strtoll(text->c_str(), &end, 10);
+    if (errno || end == text->c_str() || *end || epoch <= 0) {
+        error = error_json(400, std::string(param_name) + " must be a positive integer");
+        failed = true;
+        return nullptr;
+    }
+    const auto file =
+        std::filesystem::path(history_root) / feed / (std::to_string(epoch) + ".tsv");
+    std::string why;
+    if (!load_generation(file, parser, storage, why)) {
+        error = error_json(404, why);
+        failed = true;
+        return nullptr;
+    }
+    if (storage.generated_epoch != epoch) {
+        error = error_json(400, std::string(feed) + " snapshot " + std::to_string(epoch) +
+                                    " does not match its generation");
+        failed = true;
+        return nullptr;
+    }
+    if (epoch > newest) newest = static_cast<std::int64_t>(epoch);
+    return &storage;
+}
+
+std::optional<Response> replay_briefing(const Request& request, const AirportTable& airports,
+                                        const std::string& history_root) {
+    const bool asked = param(request, "weather_at") || param(request, "hazards_at") ||
+                       param(request, "taf_at") || param(request, "wind_at") ||
+                       param(request, "evaluated_at");
+    if (!asked) return std::nullopt;
+
+    WeatherSnapshot weather;
+    HazardSnapshot hazards;
+    TafSnapshot tafs;
+    WindSnapshot winds;
+    Response error;
+    bool failed = false;
+    std::int64_t newest = 0;
+    const WeatherSnapshot* wx = load_replay_feed(request, "weather_at", "weather", history_root,
+                                                 &parse_snapshot, weather, newest, error, failed);
+    const HazardSnapshot* hz =
+        load_replay_feed(request, "hazards_at", "hazards", history_root, &parse_hazard_snapshot,
+                         hazards, newest, error, failed);
+    const TafSnapshot* tf = load_replay_feed(request, "taf_at", "taf", history_root,
+                                             &parse_taf_snapshot, tafs, newest, error, failed);
+    const WindSnapshot* wd = load_replay_feed(request, "wind_at", "wind", history_root,
+                                              &parse_wind_snapshot, winds, newest, error, failed);
+    if (failed) return error;
+
+    std::int64_t now = newest;
+    if (const auto text = param(request, "evaluated_at")) {
+        errno = 0;
+        char* end = nullptr;
+        const long long epoch = std::strtoll(text->c_str(), &end, 10);
+        if (errno || end == text->c_str() || *end || epoch <= 0) {
+            return error_json(400, "evaluated_at must be a positive integer");
+        }
+        now = static_cast<std::int64_t>(epoch);
+    } else if (now == 0) {
+        now = static_cast<std::int64_t>(std::time(nullptr));
+    }
+    return briefing_endpoint(request, airports, wx, now, hz, tf, wd);
 }
 
 Response airports_endpoint(const AirportTable& airports, const WeatherSnapshot* weather) {

@@ -164,6 +164,31 @@ the arrival forecast is read at an earlier hour, and the time spent at altitude
 changes the oxygen finding. A headwind does the opposite. With no fresh wind, the
 typed airspeed is the groundspeed.
 
+## Replaying a briefing
+
+Each publish keeps the file it wrote, under `run/history/<feed>/<epoch>.tsv`
+(`CORRIDOR_HISTORY` overrides the directory). The live snapshot is unchanged:
+the service still hot-reloads the latest file, and a missing history directory
+does not affect a live briefing. The newest 48 generations of each feed are kept.
+
+A briefing names the generations it used:
+
+```json
+"sources": {"evaluated_at": 1700000000, "weather": 1700000000, "hazards": null, "taf": null, "wind": null}
+```
+
+Asking for those generations again returns the same inputs:
+
+```
+/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=1700000000&hazards_at=1700000000&taf_at=1700000000&wind_at=1700000000&evaluated_at=1700000000
+```
+
+A replay uses only the generations named in the query. A feed left out is
+omitted, not filled in from the live file, so the result does not depend on
+what the workers published later. `evaluated_at` is the clock for the arrival
+time, the wind hour, and the stale checks. A missing generation is a 404. A
+new snapshot epoch does not by itself raise an alert.
+
 ## Route alerts
 
 Open a WebSocket to `/alerts` with the same parameters as `/briefing` and the service

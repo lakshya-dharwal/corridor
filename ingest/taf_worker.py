@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+
+try:
+    from publish import publish
+except ImportError:  # invoked as a module from the repo root
+    from ingest.publish import publish
 
 API_URL = "https://aviationweather.gov/api/data/taf"
 CEILING_COVERS = {"BKN", "OVC", "OVX", "VV"}
@@ -146,14 +150,12 @@ def resolve_groups(taf: dict) -> list[dict]:
 
 
 def write_snapshot(records: list[dict], path: str) -> int:
-    lines = [f"#corridor-taf v1 generated={int(time.time())}"]
+    epoch = int(time.time())
+    lines = [f"#corridor-taf v1 generated={epoch}"]
     for record in records:
         fields = ["" if record[name] is None else str(record[name]) for name in SNAPSHOT_FIELDS]
         lines.append("\t".join(field.replace("\t", " ").replace("\n", " ") for field in fields))
-    temp_path = f"{path}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
-    os.replace(temp_path, path)
+    publish(path, "\n".join(lines) + "\n", feed="taf", epoch=epoch)
     return len(records)
 
 
