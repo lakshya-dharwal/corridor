@@ -55,18 +55,21 @@
   .marks i:nth-child(3) { bottom: 0; left: 0; border-right: 0; border-top: 0; }
   .marks i:nth-child(4) { bottom: 0; right: 0; border-left: 0; border-top: 0; }
 
+  .top {
+    position: sticky; top: 0; z-index: 6;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
   .chrome, .strip { z-index: 5; }
   .chrome {
-    position: fixed; top: 0; left: 0; right: 0;
     display: flex; justify-content: space-between; align-items: baseline;
-    padding: 18px 28px 0;
+    padding: 16px 28px 0;
     pointer-events: none;
     font-family: var(--mono);
     font-size: 11px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--muted);
-    background: var(--bg);
   }
   .chrome button {
     pointer-events: auto;
@@ -78,11 +81,9 @@
   .chrome b { color: var(--ink); font-weight: 500; letter-spacing: 0.14em; margin-right: 12px; }
 
   .ruler-y {
-    position: fixed; z-index: 6; top: 42px; left: 0; right: 0;
     display: flex; flex-direction: row; gap: 2px;
-    padding: 0 16px;
+    padding: 2px 16px 0;
     overflow-x: auto;
-    background: var(--bg);
   }
   .ruler-y button {
     flex: 0 0 auto;
@@ -100,15 +101,14 @@
   .ruler-y button.on { color: var(--accent); }
   .ruler-y button:hover { color: var(--ink); }
 
-  main { position: relative; z-index: 1; padding-top: 176px; }
+  main { position: relative; z-index: 1; padding-bottom: 150px; }
   .scene {
-    min-height: calc(100vh - 176px);
-    scroll-margin-top: 176px;
+    scroll-margin-top: 168px;
     display: grid;
     grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
     align-items: start;
-    gap: 56px;
-    padding: 28px 7vw 160px 40px;
+    gap: 48px;
+    padding: 32px 7vw 56px 40px;
   }
   .kicker {
     margin: 0 0 18px;
@@ -127,7 +127,7 @@
     line-height: 1;
     font-variant-numeric: tabular-nums;
   }
-  h1 { font-size: clamp(4rem, 6.2vw, 5.75rem); max-width: 10ch; text-wrap: balance; }
+  h1 { font-size: clamp(3.2rem, 5vw, 4.6rem); max-width: 14ch; text-wrap: balance; }
   h1 em { font-style: normal; color: var(--accent); }
   .giant { font-size: clamp(4.5rem, 8vw, 7rem); letter-spacing: -0.045em; line-height: 0.92; white-space: nowrap; }
   .giant.accent, .accent { color: var(--accent); }
@@ -156,12 +156,9 @@
 
   .hero .frame { justify-self: end; }
   form.dock {
-    position: fixed; z-index: 6; top: 82px; left: 0; right: 0;
     display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px;
     margin: 0; max-width: none;
-    padding: 8px 28px 12px;
-    background: var(--bg);
-    border-bottom: 1px solid var(--line);
+    padding: 8px 28px 14px;
   }
   label { display: grid; gap: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
   label.wide { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; text-transform: uppercase; }
@@ -316,11 +313,10 @@
   #liveAlert.fail { color: var(--fail); }
 
   @media (max-width: 900px) {
-    .chrome { padding: 16px 16px 0; }
-    .ruler-y { top: 40px; padding: 0 8px; }
-    form.dock { top: 78px; padding: 8px 16px 10px; }
-    main { padding-top: 228px; }
-    .scene { grid-template-columns: 1fr; gap: 32px; min-height: calc(100vh - 228px); padding: 20px 22px 170px; align-items: start; scroll-margin-top: 228px; }
+    .chrome { padding: 14px 16px 0; }
+    .ruler-y { padding: 2px 8px 0; }
+    form.dock { padding: 8px 16px 12px; }
+    .scene { grid-template-columns: 1fr; gap: 28px; padding: 36px 22px 48px; align-items: start; scroll-margin-top: 240px; }
     h1, .giant { font-size: clamp(2.7rem, 12vw, 4rem); }
     .frame, .stations { justify-self: stretch; }
     h1 { max-width: none; }
@@ -333,6 +329,7 @@
 <body>
 <div class="glow" aria-hidden="true"></div>
 <div class="marks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<div class="top">
 <header class="chrome">
   <button type="button" id="home">Corridor</button>
   <div><b id="sceneNum">01</b><span id="sceneName">Blood</span></div>
@@ -347,6 +344,7 @@
   <button id="go" type="submit">Brief this route</button>
   <p id="error" role="alert"></p>
 </form>
+</div>
 
 <main>
   <section class="scene hero" data-scene="01" data-name="Blood">
@@ -726,7 +724,7 @@ function render(briefing) {
   paintHero(phys.min_spo2_pct);
   $("dist").firstChild.textContent = Math.round(route.distance_nm).toLocaleString();
   const wind = briefing.wind;
-  let windText = " One line.";
+  let windText = "";
   if (wind && wind.status === "ok" && wind.tailwind_kt != null) {
     const knots = Math.round(wind.tailwind_kt);
     windText = " " + (knots >= 0 ? knots + " kt of tailwind." : (-knots) + " kt of headwind.");
