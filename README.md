@@ -17,7 +17,7 @@ Educational project. Not medical advice and not for operational flight planning.
 | Live weather in the service: hot-reloaded snapshot, stale-data handling | Built, tested, run end to end with live METARs |
 | METAR ingestion worker (Python) | Run live: publishes the snapshot and writes METARs, airports and feed status to Postgres |
 | Postgres/PostGIS schema, Docker Compose | Running locally; schema loaded, re-runs do not duplicate rows |
-| Redis | Container runs; nothing uses it yet |
+| Redis | Left in Docker Compose. The service answers from snapshot files |
 | Hazard areas: G-AIRMET ingestion, route intersection, entry/exit timing, altitude check | Built, tested, run end to end on live data; result matches PostGIS |
 | SIGMET parsing | Written from the documented fields; none was active to test against |
 | WebSocket route alerts (`/alerts`): RFC 6455 handshake and framing, per-route change detection | Built, tested, run live with two listeners |
@@ -25,12 +25,14 @@ Educational project. Not medical advice and not for operational flight planning.
 | Destination forecast at arrival (TAF) | Built; the group covering ETA is briefed, and a worse TEMPO or PROB is called out |
 | Cruise wind and the groundspeed it makes | Built; GFS wind at cruise becomes one tailwind, and the ETA moves with it |
 | Demo page: map, hazard areas, altitude and SpO2 chart, live alerts | Built; checked in a desktop browser with live data, not on a phone |
+| Snapshot history and briefing replay | Built, tested; the same epochs and clock return the same briefing |
+| Engine tests on every push | GitHub Actions workflow `engine` |
 | ADS-B traffic ingestion | Not started |
-| Monitoring, load test, deploy, map frontend | Not started |
+| Load test and a production deploy | Not started |
 
 ## Demo
 
-One command builds the server if needed, starts both feed workers, and serves the page:
+One command builds the server if needed, starts the weather, hazard, forecast, and wind workers, and serves the page:
 
 ```bash
 tools/run_demo.sh 8080
@@ -188,6 +190,8 @@ omitted, not filled in from the live file, so the result does not depend on
 what the workers published later. `evaluated_at` is the clock for the arrival
 time, the wind hour, and the stale checks. A missing generation is a 404. A
 new snapshot epoch does not by itself raise an alert.
+
+On 17 November 2026 a KPHX to KIXD briefing was questioned because the KIXD TAF contains a TEMPO and later FM groups, and the arrival still came back VFR. The briefing named its inputs: `evaluated_at` 1794900171 (07:22Z), weather 1794899886, hazards 1794899883, taf 1794899882, and wind 1794899882, all from 07:18Z. Replaying those generations at that clock, `/briefing?from=KPHX&to=KIXD&alt=13500&gs=140&weather_at=1794899886&hazards_at=1794899883&taf_at=1794899882&wind_at=1794899882&evaluated_at=1794900171`, returned the same result: 341.6 minutes, 16.2 kt of tailwind, and KIXD at arrival VFR, with 6 sm visibility, no ceiling, and wind 160 at 7. The ETA, 13:04Z, sits in the base group, before the 17Z FM. The 18–21Z TEMPO is gusts only, so it does not change the category. Those history files stay on the machine that published them.
 
 ## Route alerts
 

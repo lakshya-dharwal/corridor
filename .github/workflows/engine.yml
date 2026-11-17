@@ -1,0 +1,16 @@
+name: engine
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the engine tests
+        run: |
+          cmake -S engine -B engine/build
+          cmake --build engine/build
+          ctest --test-dir engine/build --output-on-failure
